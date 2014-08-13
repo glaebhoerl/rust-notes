@@ -1,0 +1,18 @@
+- the value of Rust is its invariants, if ever in doubt, err on the side of more and stronger invariants
+- avoid accidental complexity, faithfully and fastidiously model inherent complexity
+  - omitting accidental complexity from the language makes the language as well as programs (semantically) simpler
+  - sweeping inherent complexity under the run in the language causes it to surface magnified in programs instead
+- if we want to compete effectively with C++, we need the same capabilities. some level of complexity is therefore inevitable.
+  the goal is that all of our complexity budget should be spent on inherent complexity, and not accidental complexity.
+- Worse Is Better is deeply wrong
+- abstraction boundaries are sacred
+- semantic invariants should be enforced semantically, not syntactically
+  - C++ private classes example
+  - Haskell Coercible examples
+- verbosity proportional to obscurity / inversely to ubiquity
+- overloading meanings keywords in different contexts is OK iff they mean *similar* things, and/or if they are natural when interpreted as plain English. bad idea only if meanings totally unrelated, as in C/C++. should have fewer keywords and get more use out of them. common vocabulary is nice. we already have this kind of overloading, e.g. for `self` in methods and modules.
+- goal: as good as we can make it. not "good enough", not perfect. 
+- do not sacrifice long-term language quality for an earlier release
+- do aggressively limit the scope of what will be in the release
+- when in doubt, choose the backwards compatible option
+

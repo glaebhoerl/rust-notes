@@ -1,0 +1,720 @@
+# Existential Types (ET)
+
+Derived from SST (Statically Sized Types), which has a confusing name. I like this one better.
+
+# Summary
+
+The current design (DST) is based on a concept called dynamically sized types, which are sort-of-like existential types, but not quite. This proposal suggests using actual existential types instead.
+
+# Motivation
+
+Existential types more accurately model the inherent logical structure, which has a number of beneficial effects: they are easier to reason about (not least when thinking about the design of the language itself), better behaved semantically, and easier to extend in new directions. It's no accident that existential quantification is an idea from mathematics, while dynamically sized types have no prior art that I'm aware of, and were originally inspired by a syntactic observation. (If `~[T]` is a type, what about `[T]`?)
+
+# Overview of design
+
+As with SST, `Trait` and `[T]` do not exist as types in themselves. Instead, when used inside appropriate (pointer-like) generic types, they are shorthand for existential types. `Box<Trait>` means `exists T: Trait. Box<T>` and `Box<[T]>` means `exists static N: uint. Box<[T, ..N]>`.
+
+The appropriateness of generic types for "hosting" such existentials is determined by user-provided and compiler-checked annotations on type parameters. A `ref` annotation on a type parameter is a contract between the provider of the item and its consumer, through which the provider promises that the representation of the item does not depend on the identity of the type provided as argument (and the compiler, again, verifies that this is so), and this, in turn, allows the consumer to instantiate the parameter with a type whose identity is not statically available: in other words, with an existential type. (The `unsized` annotation of DST is `ref` seen through distorted glass, and serves the same purpose.)
+
+With this guarantee, *in addition* to any monomorphised representations of the given item, the compiler can also generate a fully generic representation which is suitable for types whose identity is not known at compile time; in other words, existential types. An idea that is central to this design is *evidence*, for instance, evidence that trait bounds are satisfied. If a trait bound is satisfied, there is *always* evidence of it. Its form varies: for statically known types, the compiler keeps track of it at runtime, while for existential types, evidence is threaded around as vtable pointers at runtime.
+
+# Comparison with DST
+
+# Notable benefits
+
+ * Less ad-hoc, logical, more flexible rules around which methods are callable on trait objects
+
+ * fn foo(arg: &Trait) and fn foo<ref T: Trait>(arg: &T) are semantically equivalent
+
+ * Calling generic fns with trait objects
+
+ * Box<NotBox<Trait>> is allowed
+
+ * Can easily express internal vptrs as trait bounds on types
+
+ * Unboxed trait objects fit in without conflict
+
+ * Allows higher-rank types
+
+ * Easily extended with explicit existential quantification syntax
+
+# Unresolved questions
+
+ * typedefs
+
+ * impls
+
+# Detailed design
+
+## `ref` modifier on type parameters
+
+Introduce an optional modifier on type parameters: `ref`. This corresponds to `erased` in SST and performs the same function as `unsized` in DST proposals.
+
+I like the name `ref` because:
+
+ * It's a mnemonic for "this type is only manipulated by reference", which is the gist of it.
+
+ * It's short.
+
+ * It's already a keyword.
+
+(Arguably there's potential for confusion with `ref` in patterns, but they can also be thought of as having the same meaning: "I will only use this thing by reference".)
+
+The precise meaning of it is: If an item has a `ref T` type parameter, then its representation does not *need to* depend on the identity of `T`; therefore, it is possible for a fully generic form of that item to exist. This allows instantiating the type parameter `T` with an unknown type - a type whose identity is not available at compile time.
+
+Thus `ref` on a type parameter is a contract which imposes restrictions on the implementor of the item, and enables greater flexibility for its consumers.
+
+The precise definition of these restrictions follows.
+
+### `ref` in `struct`s and `enum`s
+
+If you write
+
+    struct MyStruct<ref T> { ... }
+
+then you must obey the following restrictions:
+
+ * In the definition of `MyStruct`, `T` may only occur, directly or indirectly, behind a `ref`-qualified type parameter of a generic type.
+
+ * A `Drop` impl for `MyStruct`, if any, must also have the form `impl<ref T> Drop for MyStruct<T>`.
+
+The built-in types `&`, `&mut`, `*`, `*mut`, and `~` are considered to have `ref` type parameters.
+
+The first rule means that:
+
+    struct MyStruct<ref T> { x: T }          // illegal: use of `T` not behind a `ref`
+
+    struct MyStruct<ref T> { x: Option<T> }  // illegal: use of `T` not behind a `ref`
+
+    struct MyStruct<ref T> { x: ~T }         // OK: `T` is directly inside `~`, whose type parameter is `ref`
+
+    struct MyStruct<ref T> { x: ~Option<T> } // OK: indirectly inside a `ref` type parameter
+
+    struct MyStruct<ref T> { x: int }        // OK: not using `T` at all is fine as well
+
+The question of whether to allow the indirect case corresponds, in DST, to the question of whether an unsized type may only occur directly behind a pointer. As we have already realized, this is too restrictive.
+
+The rules for `enum`s (and `type`defs) are just the same. (Currently, I believe we offer no guarantees at all w.r.t. the representation of enums: this would require a slight addendum such that e.g. `Option<~T> and `Option<~U>` would always have the same representation. This seems plenty reasonable as I cannot imagine how or why they could be different.)
+
+### `ref` in `fn`s
+
+If you write
+
+    fn my_fn<ref T>(...) -> ... { ... }
+
+then you must obey the following restrictions:
+
+ * In the types of all bindings (incl. its arguments) and expressions in the body of `my_fn`, `T` may only occur, directly or indirectly, behind a `ref`-qualified type parameter of a type.
+
+ * `my_fn` may not access any field of a struct or enum whose offset depends on the identity of `T`.
+
+The first rule is analogous to the one for `struct`s. It means that you can't have arguments or `let` variables of type `T`, you can't call a function which expects a bare `T`, and so on. The return type position is intentionally omitted here: the return value can be returned through a pointer into space provided by the caller, who knows what type it is (this is equivalent to using `&out`), so this is actually fine.
+
+The second rule ... TODO
+
+### `ref` in `trait`s
+
+This is not allowed, as it doesn't make sense. The meaning would be something to the effect that the same vtable could be used for all types, but the whole point of a trait is that the vtable to use depends on the identity of `Self` (and/or the other type parameters), as specified by the programmer through `impl`s.
+
+### `ref` in `impl`s
+
+Writing `impl<ref T> ...` entails the same restrictions on all uses of `T` in all `fn`s in the `impl` as discussed in the restrictions on `fn`s above.
+
+(The definition of the trait does have significance here, in that for some method signatures (i.e. ones which expect their arguments unboxed), obeying the `ref` restrictions may be impossible, and in that case there's no way to write a `ref` impl for those traits.)
+
+## Trait objects
+
+If you have a generic type with a `ref` type parameter, you can form existential types (trait objects). As the argument for a `ref` type parameter of a generic type, instead of the name of a type, you may use the name of a trait, in which case the resulting type will be existentially quantified over types implementing the trait. The existential quantification is always around the innermost `ref` type parameter. For instance:
+
+    ~ToStr         => exists T: ToStr. ~T
+    ~Option<ToStr> => exists T: ToStr. ~Option<T>
+    ~~ToStr        => ~(exists T: ToStr. ~T)
+    ToStr          => illegal
+    Option<ToStr>  => illegal
+
+As with `ref`-qualified type parameters of `fn`s, if the existentially quantified type is used as a type argument of another type, for instance `exists T: Trait. MyStruct<T>`, you may not access any member of a struct or enum (in this case `MyStruct`) whose offset depends on the identity of `T`.
+
+The above also logically implies the possibility of existentially quantifying more than one type at a time. For instance:
+
+    struct BoxedPair<ref A, ref B>(~A, ~B);
+    BoxedPair<ToStr, ToStr> => exists T: ToStr. exists U: ToStr. BoxedPair<T, U>
+
+There's a very interesting open question here with regards to typedefs. Suppose we have:
+
+    type NestedBoxes<ref T> = ~~T;
+    type TwoBoxes<ref T> = (~T, ~T);
+
+What should the meaning of `NestedBoxes<ToStr>` and `TwoBoxes<ToStr>` be? Should existential quantification be applied before or after expanding the typedef?
+
+This is before:
+
+    NestedBoxes<ToStr> => exists T: ToStr. NestedBoxes<T> => exists T: ToStr. ~~T
+    TwoBoxes<ToStr>    => exists T: ToStr. TwoBoxes<T>    => exists T: ToStr. (~T, ~T)
+
+And this is after:
+
+    NestedBoxes<ToStr> => ~~ToStr          => ~(exists T: ToStr. ~T)
+    TwoBoxes<ToStr>    => (~ToStr, ~ToStr) => (exists T: ToStr. ~T, exists U: ToStr. ~U)
+
+I think I lean towards the former, but I'm not very sure about it.
+
+TODO +- One of them keeps typedefs transparent, the other adds expressiveness.
+
+### Creating trait objects
+
+TODO Given a type implementing the trait, auto-coerce to a trait object, e.g. &int to &Show, by adding dynamic evidence (a vptr).
+Trait object upcasting to super-trait objects falls out for free! You have an unknown type which implements the trait, auto-coerce it to the expected trait object, evidence is taken from dynamic evidence of previous trait object, rather than static information.
+
+### Operations on trait objects
+
+If you have a type `struct RefType<ref T> { ... }` and a trait object `RefType<Trait>`, you may pass it as argument to a function parameterized over a type `ref T` which expects an argument of type `RefType<T>`:
+
+    fn with_ref_type<ref T>(arg: RefType<T>) -> ... { ... }
+    fn with_ref_type_using_trait<ref T: MyTrait>(arg: RefType<T>) -> ... { ... }
+
+    let obj: RefType<SomeType> = ...;
+    let trait_obj: RefType<MyTrait> = obj;
+    with_ref_type(trait_obj); // OK
+    with_ref_type_using_trait(trait_obj); // OK
+
+(In practice, `RefType` would most of the time be something like `&` or `~`.)
+
+Here, because `with_ref_type` is capable of manipulating unknown types, we can instantiate its type parameter to the unknown type inside the trait object. `with_ref_type_using_trait` has a trait bound `MyTrait`, which is satisfied by our unknown type, so this is also OK.
+
+#### `Deref` trait
+
+If we have
+
+    trait Deref<T> { fn deref<'s>(&'s self) -> &'s T; }
+
+and an impl of it for our `RefType`, which is also `ref`:
+
+    impl<ref T> Deref<T> for RefType<T> { ... }
+
+and if method lookup implicitly derefs (using `Deref`), then we can also call methods of `MyTrait` on `RefType<MyTrait>` (provided that the method takes `self` by reference, the appropriate reference-type borrows/coercions are possible, etc.).
+
+(Note that the impl of `MyTrait` for the unknown type `T` itself *need not* be `ref`, because it doesn't have to be generic over unknown types: it knows the identity of `T` and is specialized to it, it is only us who do not.)
+
+#### True existentials, and a valuable use case
+
+As also seen above, here trait objects are true existential types. This allows us to further loosen the restrictions on what functions and methods can be used with them (or also, how). Previously any trait method that mentioned the type `Self` was immediately disqualified from being callable on a trait object. Now, however, we can allow calling such a method, and make use of the knowledge that `Self` will be the same unknown type that is inside the trait object. A pointless but illustrative example: given trait objects of type `&Eq`, you couldn't say `trait_obj == other_trait_obj`, but you *could* say `trait_obj == trait_obj`, because in that case the `Self` type can be known to be the same on both sides (even if its precise identity is unknown).
+
+And this is actually useful. The current formulation of the iterator trait is:
+
+    fn next(&mut self) -> Option<T>;
+
+and permits calling `next()` on an iterator after it has been exhausted (returned `None`), a possibility which we can deal with only through convention.
+
+We could change it to consume `self` and make it so that exhausted iterators cannot exist:
+
+    fn next(self) -> Option<(Self, T)>;
+
+but then we lose the ability to use it with trait objects, and it also might be slower due to having to move the iterator around.
+
+If we also have `&move` references, then under this semantics for trait objects, we can handily solve both problems:
+
+    fn next<'s>(&'s move self) -> Option<(&'s move Self, T)>;
+
+Then if we have a trait object `iter: &move Iterator<T>` (which is also borrowable from e.g. `~Iterator<T>`), we can iterate over its values like this:
+
+    let mut iter = ...;
+    loop {
+        iter = match iter.next() {
+            Some(next_iter, val) => {
+                do_something_with(val);
+                next_iter
+            },
+            None => { break }
+        }
+    }
+
+The type of `iter` is not known at compile time (it's existentially quantified), but from the signature of `next`, we know that the iterator type which comes out must be the same as the one which went in, so we can accept this program. And since `&move` is a stronger version of `&mut`, `next()` can also modify the iterator in-place, so this is likely to be just as efficient as the current approach.
+
+(An implementation note: merely generating a fresh type variable for each existentially quantified type wouldn't be sufficient, because for instance, if the `let` above were inside the `loop`, its type could change in each iteration of the loop. To take control flow into account, I expect the same algorithm could be used here which we already use for lifetimes: which are, I suspect, nothing more than fresh type variables for the implicit `ST` monad.)
+
+## Dynamically sized arrays
+
+Analogously to and in the same circumstances as trait objects, the programmmer may omit the length of an array type. The resulting type will then be existentially quantified over the length of the array.
+
+    ~[T]         => exists N: uint. ~[T, ..N]
+    ~Option<[T]> => exists N: uint. ~Option<[T, ..N]>
+    ~~[T]        => ~(exists N: uint. ~[T, ..N])
+    [T]          => illegal
+    Option<[T]>  => illegal
+
+### Operations on dynamically sized arrays
+
+As with trait objects, dynamically sized arrays can also be passed as arguments to functions parameterized over `ref T`. Indexing could work this way:
+
+    trait Index<T> {
+        fn index<'s>(&'s self, uint) -> &'s T;
+    }
+
+    impl<ref T, ref static N: uint> Container<T> for [T, ..N] {
+        fn len(&self) -> uint { N }
+    }
+
+    impl<ref T, ref static N: uint> Index<T> for [T, ..N] {
+    
+    }
+
+    impl<'s, T, ref Arr: Index<T>> Index<T> for &'s Arr { ... }
+
+
+## A note on abstraction boundaries
+
+## Code generation
+
+### Drop, Trace, sizeof, alignof
+
+TODO W.R.T. vptr optimization (vptr directly to single method, rather than vtable): have these always at a negative offset, use TNTC?
+
+## A worked example: `Rc<T>`
+
+## `impl`s on existentially quantified types
+
+impl Eq: first, dynamic_transmute to same length (runtime equality coercion?), then == on fixed-length slices?
+only works for Eq, not other traits (Ord)?
+doesn't work: always needs to work for DIFFERENT lengthed arrays
+
+## Commentary
+
+good framework to express all kinds of things in
+
+for example `struct Foo<T: Trait>` for C++-style thin pointers + vtables
+
+## Possible future directions
+
+explicit syntax
+
+"I see Motivation and Detailed design, but no Summary, Alternatives or Unresolved questions sections."
+
+* Solve to_string() problem:
+struct str<static N: uint> { contents: [u8, ..N] }
+"12345": str<5>
+box "12345": Box<str> (Box<str<5>>)
+
+* Solve Any-cast problem
+trait Dynamic {
+    static TYPE_ID: TypeId;
+}
+fn dynamic_transmute<ref type To: Dynamic, ref type From: Dynamic, type<ref type> Context>(from: Context<From>) -> Option<Context<To>> {
+    if (TYPE_ID::<From> == TYPE_ID::<To>) {
+        unsafe {
+            Some(unsafe_transmute(from))
+        }
+    } else {
+        None
+    }
+}
+let dyn_box: Box<Dynamic> = box 5i;
+let int_box: Box<int> = dynamic_transmute(dyn_box);
+
+How to write e.g. Monoid instance for functions?
+
+Haskell:
+instance Monoid b => Monoid (a -> b) where
+    mempty = const mempty
+    mappend f g = \a -> mappend (f a) (g a)
+
+Rust:
+trait Monoid {
+    fn mempty() -> Self;
+    fn mappend(a: &Self, b: &Self) -> Self;
+}
+// WRONG!
+// Can't create a `Func`! Can only call it.
+impl<A, B, Func: Fn(A) -> B> Monoid for Func {
+    fn mempty() -> Func { ??? }
+    fn mappend(f: &Func, g: &Func) -> Func { ??? }
+}
+impl<A, B> Monoid for &FnOnce(A) -> B {
+    fn mempty() -> 
+}
+=>
+static MONOID_FNONCE<A, B>: Monoid<exists T: FnOnce(A) -> B. &T> = Monoid { ... };
+"`struct Monoid`" must be `ref`??
+  (trivially satisfied, as it only contains `fn` pointers?)
+(have existential impls imply universal ones + treat them as a type constructor + require a cast??)
+treat &Foo as Exists<Foo, &>? only for purpose of impls? can both at the same time make sense?
+  even if it's just an `Exists` wrapper instead of first-class existentials, there should be an unpack operation!
+  how well does this work for the other two forms?
+can we instantiate type variables to existentials?? should we? do we need to?
+  Vec<Box<Dynamic>> would be nice for example...
+  and has to be for `Vec<exists T: Dynamic. Box<T>>` to be sensible
+
+
+`ref static N: uint` means you can pass a runtime value for N?? like `reflection`?
+  yes, believe so.
+  Implicit configurations (reflection)
+
+Three forms of implicit existential quantification:
+ - elide type, replace with trait (&Trait, &Foo<Trait>, ..)
+   repr {obj, vptr}
+ - elide type, replace with nothing (&GenericType)
+   repr {obj}
+ - elide type-level value (uint)
+   repr {obj, value}
+QUESTION elide first or last argument? how to handle multiple elisions / ambiguity?
+
+minimal forward compatible subset?
+based on MLF? or QML, HML, HMF?
+
+Paper: "First-class polymorphism with existential types" (MLF)
+  this is perfect!! implicit unpacking of existentials when passing to polymorphic functions is *exactly* what we were looking for
+  `ref` means: can be instantiated with type variables??
+    as opposed to with monomorphic types?? (what is the precise distinction? top-level vs. local??)
+    is this connected to `some` / the same as the tau vs. sigma distinction?
+  is there an analogy between "unboxed trait objects" and non-`ref` typarams, resp. boxed and `ref` ones?
+  can you get a boxed trait object from an unboxed one by putting it in a box?
+    i.e. can you go from `exists T: Trait. T`, or `Abstract<T, Trait>`, to `exists T: Trait. Foo<T>`?
+    depends on the constructor of `Foo`? what are the typing judgments?
+    or is the right question whether existential quantifiers can be moved outwards?
+    not in general! but in the unboxed case?
+    I think... yes? 
+      not in the general case because a boxed `Vec<exists T. Box<T>` might have different Ts
+      but "unboxed trait objects" have precisely the restriction that it must be the "same type"
+      is this "equivalent" to the existential quantifier being "outside" in the first place??
+      (and what about `some`?)
+  are unboxed trait objects the same thing as "unsized types"?
+    this would allow writing `impl<T> Eq for [T]` and `impl<T: Eq> Eq for &T` and having it work for `&[T]`?
+    generalize this: permit "transient" unboxed existentials, e.g. `Foo<exists X. Y>`, as long as they "end up" boxed...?
+    "end up boxed" means exactly: used in a `ref` position!
+    so the question is not about where unboxed existentials can be used, but how they can be formed...?
+      if `x: &Show` => `x: exists T: Show. &T`, then `*x: Show` => `*x: exists T: Show. T`??
+      are you *allowed* to write `*x`???
+    but other question: is there any reason you couldn't write `struct Eq<ref T>`, and instantiate it with `exists static N: uint. [T, ..N]`?
+       in this case you aren't actually putting an unboxed existential into it (i.e. never actually construct one(?))
+       it's purely(?) a type-level question
+       question of whether `&exists static N: uint. [T, ..N]` is equivalent to `exists static N: uint. &[T, ..N]`
+       this is the same moving-existentials-outwards question from above
+       seems like it *should* be OK, but how to be sure / formulate it rigorously?
+  what's the relationship between the "some" operator and unboxed trait objects?
+    are they the same thing in any sense??
+
+Paper: "Quantified types for MLF"
+  representation issue is nasty! could it make sense for Rust?
+  is there a way to cleanly forbid just the difficult-to-represent things?
+  does this extend easily to existential types?
+  maybe yes; but same representation issue arises, e.g. `Vec<&bool>` to `Vec<&Show>`
+    this is a much stronger constraint than the universal/forall case!
+    could conceivably accept a penalty on `forall` types to allow instantiating them to concrete types, because Rust wasn't expected to have higher-rank types anyways
+    but a penalty on all concrete types to allow existentially quantifying them is ridiculously unacceptable
+  this is the same question as what I had been considering previously!!
+  with the conclusion to not allow it, only at the "top level"
+    do an explicit `map()` to change type/representation
+  again: how to formulate the restriction precisely?
+    the representation issue *only* arises when needing to store evidence
+    `Vec<&bool>` to `Vec<&>` would theoretically be OK
+    so would `Vec<&Copy>`, e.g.
+    but should we take this into consideration?
+
+TOREAD "Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism"
+
+
+QUESTION should `ref T` be a different *kind*?
+kind or role?? what's the difference/relationship?
+does anything *produce* a `ref` type (rather than just as parameters)? (don't think so...?)
+is this related to GHC's #/?/?? kinds and subkinding?
+boxity polymorphism? http://www.reddit.com/r/haskell/comments/2d81tl/type_families_on_unboxed_types/cjnoamn
+(is `ref` precisely dual to GHC's new solution?)
+
+
+http://www.reddit.com/r/rust/comments/2c6pn0/how_does_rust_implement_calling_generic_functions/
+Allows dynamically linked polymorphic functions!
+
+TOREAD Implementing type classes
+http://okmij.org/ftp/Computation/typeclass.html
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+OLD STUFF
+
+
+ESSENTIAL
+- add `ref T`
+  on a struct or enum: any uses of `T` must be directly or indirectly behind a `ref`
+    if the type uses `ref T`, so must its `impl Drop` and `impl Trace`
+  on a function: the above, and the function may not access any field of a struct/enum whose offset depends on T
+    the return type position counts as `ref`: equivalent to `&out T`
+      QUESTION is there any way to call it inside a `ref` fn?
+      ANSWER by returning it in turn... or *mut_ref = ref_fn(), *out_ref = ref_fn()
+    this means the function can be called with an unknown `T`
+    a generic specialization of the function is generated which takes all trait dictionaries for T (including Drop) as hidden arguments
+    when the type is known, the function is monomorphized as usual
+    QUESTION what happens with fn foo<ref T>(eat: fn(~T))? how is it ensured that `eat` is `ref`?
+    ANSWER it's not necessary. the client passing in `eat` knows the type `T` and may use it however. it is only unknown to `foo`.
+  on a trait: disallowed, doesn't make sense
+  on an impl: means method impls must all obey the function rules
+  built-in pointer types count as `ref`
+- given Foo<ref T>, it is permitted to write Foo<Trait> or Foo<[T]>
+  this is represented as (Foo<_>, impl|uint)
+- also allowed: `struct FooT<T>`, `&FooT<Trait>`
+- given `fn with_foo<ref T: Trait>(foo: Foo<T>)` and `foo: Foo<Trait>`, it is permitted to write `with_foo(foo)`
+- `impl<ref T: Trait> Trait for &T` also leads to `&Trait: Trait`
+- disallow `impl Trait for Trait`
+  "existential impl" makes sense for uints because you might want to use their value at runtime
+  this is not true of the specific impl inside a trait object
+  and it breaks coherence
+    or can `exists` be treated as a type constructor?!
+    can the coherence violation be used to violate soundness?
+  foo<T: Trait>(&T) and foo(&Trait) should behave identically
+- no bounds in structs
+  unnecessary, unrelated, potential a separate feature (vtable-inside-struct!)
+- QUESTION what happens with `Foo<&T>` -> `Foo<&Trait>`? `&Foo<&Trait>?
+  probably just not allowed
+  `&Trait` is not a proper supertype of `&T`
+  ...but perhaps in `ref` contexts?!
+  wait, which is a subtype of which?!
+    semantically one direction, physically the other?
+      &Trait has less information than &T: &Trait <: &T
+      but &T is prefix of &Trait: &T <: &Trait
+    &Trait can be cast to &_/&NoTrait, but not to &SomeType
+- allow `impl Foo for [T]`??
+  this impl is used for both fixed and variable-length arrays
+  !QUESTION how does this work exactly?
+- `impl Trait for [T]` plus `impl<T: Trait> Trait for &T` should imply `&[T]: Trait`
+  QUESTION how?
+- QUESTION how to handle/allow actual operations on Foo<Trait>/Foo<[T]>?
+  array index, method calls
+  array indexing: is an fn<ref static uint>?
+
+IMPORTANT POINTS
+1. DST 1: coercion of DSTs behind pointers
+2. DST 2: "In general, the only legal operation we would permit on an existential type like RC<[int]> or ~[int] is to dereference it."
+3. DST 3: running drop glue on existential types
+4. DST 4: destructor on Rc<[T]> - no vtable?
+ - impl<ref T> Drop for Rc<T>
+   gets specialized to impl<ref static N: uint> Drop for Rc<[T, ..N]>?
+5. DST 5: "The final rule Fat-Struct permits a pointer to a struct type to be coerced so long as all the fields will still have the same type except the last one, and the last field will also be a legal coercion. This rule would therefore permit Fat(RcData<[int, ..3]> as RcData<[int]>) = 3, for example, but not Fat(RcData<int> as RcData<float>)." Does this preserve abstraction boundaries?
+6. DST 5: "Finally, the third rule states that we can convert a struct R<T...> into another instance of the same struct R<U...> with different type parameters, so long as all of its fields are pairwise convertible" What about things behind pointers (1.)? Does this preserve abstraction?
+7. DST 5: " we only permit method calls with an object receiver if the method meets two conditions:
+   - The method does not employ the Self type except as the type of the receiver.
+   - The method does not have any type parameters." ... "for any trait Trait where all methods meet the above restrictions, then the dynamically sized type Trait implements the trait Trait" Here the restriction is only on calling methods, and the first could be partially lifted.
+QUESTION how can existential types be typechecked? typeof(*f()) != typeof(*f())... use a control flow thing?
+  same algorithm as for lifetimes?! (type variables of the ST monad)
+
+
+
+
+
+
+
+
+
+# PLAN: SST
+
+QUESTIONS
+1. what is the meaning of `impl Foo for [T]`? how does it even work?
+2. given `impl Foo for [T]`, when/how does `impl<T: Foo> Foo for &T` apply to `&[T]`?
+3. how to handle operations on SST types? what operations are even possible?
+4. what happens with `Foo<&T>` -> `Foo<&Trait>`? `&Foo<&Trait>? what if Foo stores T indirectly?
+5. how should `~(A + B)` work, and upcasting to `~B`?
+6. what distinction should be made between traits with vtables and those without (Freeze, subtype constraints)?
+7. how would borrowing e.g. `~[~Trait]` to `~[&Trait]` work?
+
+
+ANSWERS
+1. what to do wrt existentially quantifying inner types + alignments and crap?
+`fn foo<ref T>(...` is prohibited from accessing any struct/enum field whose offset depends on T
+the goal is to maintain abstraction: people who see struct Foo as an abstract type should not depend in any way on its definition
+these restrictions are in place for people who *do* see its definition, and so by definition may depend on it
+similarly for accessing fields of `&SomeFoo<Trait>` or `&SomeFoo<[T]>`
+
+2. struct Stuff<T> { a: int, b: T, c: int }, struct Foo<ref T> { x: ~Stuff<T> } legal or not?
+same thing as ~Stuff<Trait> and necessary for Rc => legal
+~Stuff<Trait> => (~Stuff<_X>, impl Trait for _X)
+Foo<Trait> => (Foo { x: ~Stuff<_X> }, impl Trait for _X)
+
+3. struct Foo<ref T> { f: fn(T) -> T } legal or not?
+legal, but you can't call f from `fn g<ref T>(...`
+
+4. do we need `ref` in traits?
+trait Eq { fn eq(self: &Self, other: &Self) -> bool; } // OK
+fn my_eq<ref T: Eq>(self: &T, other: &T) -> bool { eq(self, other) } // OK!
+let f: for<T: Eq> fn(&T, &T) -> bool = my_eq; // OK
+no, we don't
+`ref` is a trait would be for something like having a single vtable for all types,
+but that's an oxymoron: traits are for a subset of types by definition
+having the vtable be a fixed size is (a) trivial because all it contains is fn pointers
+and (b) not that important because it's only ever accessed through vtable pointers
+(but revisit this if we have associated statics!)
+
+5. do we want `ref` in impls?
+yes we do
+so that a single generic vtable can exist for the impl
+
+6. is `for<ref M: Monoid> &Fn<&M, M>` allowed?
+trait Fn<Arg, Ret> {
+    fn call(self: &Self, arg: Arg) -> Ret;
+}
+struct MyHigherRankFn;
+impl<ref M: Monoid> Fn<&M, M> for MyHigherRankFn {
+    fn call(self: &MyHigherRankFn, arg: &M) -> M {
+        mappend(arg, arg)
+    }
+}
+let f = &MyHigherRankFn as for<M: Monoid> &Fn<&M, M>;
+let twelve = f.call(&6);
+yes, this should work
+the vtable will be one where all methods take the hidden Monoid arg
+
+7. is `ref T` allowed on enums?
+it should be!
+
+8. when/how does `impl<T: Foo> Foo for &T` apply to `&Foo`?
+needs to be `impl<ref T: Foo> Foo for &T` for starters
+so what we want is `fn f<T: Foo>(x: T)`, `r: &Foo`, `f(r)`
+because it works for all T, the impl can just be used, its methods
+passed the data pointer from `&Foo` for self, and the vtable to satisfy `T: Foo`
+
+9. what is the meaning of `impl Foo for [T]`? how does it even work?
+sort of like `impl<ref static N: uint> Foo for [T, ..N]`
+let's look at Eq:
+impl<T: Eq> Eq for [T]
+impl<T: Eq> Eq for (ref static N: uint, [T, ..N]) {
+    fn eq(self: &[T], other: &[T]) { // ???
+    }
+}
+not depending on N is guaranteed, because it's not even in scope!
+[T] is "an array of unknown size"
+it may only be used behind `ref`
+the difference vs. <ref static N: uint> is that *two* uints get passed in, not one. of course.
+the `&[T]` here is different / a different size from the &T in the trait, is this a problem?
+will this let us use == on two fixed length arrays of different size? how the heck? only if they're existentialled first?
+will it allow == on two fixed length arrays of the _same_ size?
+yes, this is what this impl means: it may be used on any two T arrays regardless of their size! does this make sense?
+it's certainly bold...
+alternately: desugar to a separate existential impl and a universal one wrapping it?
+then it's a bit illogical, but perhaps makes trait matching less crazy?
+the signature of `eq` in the impl would be more general than how it's permitted to be used
+how does trait selection happen _now_?
+could the same thing extend to existentially quantifying types in impls?
+that's not useful at the top level, but maybe for type arguments?
+impl Trait1 for Trait2 means... ?
+fn my_eq<T: Eq>(a: T, b: T) -> bool { eq(a, b) }
+my_eq([1, 2, 3], [1, 2, 3, 4]) ??
+no, this doesn't make sense. T must be the same type, trait bounds are checked only after.
+but then given a: &[T], b: &[T] how can my_eq(*a, *b) possibly work? is DST right after all?
+interpret &Trait as not exists T: Trait. &Trait, but &Exists<Trait>? what else does this invalidate?
+it means you have to write `impl Message for Message`. no good.
+we should only have unknown types, not "unsized types"
+(unknown) newtype of an (unknown) type?
+
+back to the beginning: some conservative hack to just make `impl Eq for [T]` work for ~[T] etc.?
+(if `impl Eq for ~[T]` is no better either...)
+
+struct Array<'s, T>(exists N: uint. &'s [T, ..N])
+impl<'s, T> Eq for Array<'s, T> { ... }
+[1, 2] == [2, 3, 4] -> Array([1, 2]) == Array([2, 3, 4])
+struct ToStr<'s>(exists T: ToStr. &'s T)
+
+idea: implicit newtypes only for arrays?
+means `impl<static N: uint> Foo for [T, ..N]` can't be used for `&[T]`
+hypothesis: you only want to use explicit `impl<static N: uint> ...`
+            if the N shows up in more than one place, and if it shows up
+            in more than one place, then you couldn't use it with trait objects anyhow
+QUESTION is this true?
+  where could it show up:
+    trait: impl<static N: uint> Foo<N> for [T, ..N]
+    type:  impl<static N: uint> Foo for [[T, ..N], ..N]
+    supertrait: impl<static N: uint, T: Bar<N>> Foo for [T, ..N]
+QUESTION is there an easy/obvious way to automatically go in the other direction? (existential -> universal impl)
+  from   impl Foo for [T]
+  i.o.w. impl Foo for (exists static N: uint. [T, ..N])
+  to     impl<static N: uint> Foo for [T, .. N]
+QUESTION how does this interact with everything else?
+
+the issue is essentially:
+given `fn foo<T>(a: &T, b: &T)`, should you be able to `foo(&[1, 2] as &[int], b: &[1, 2, 3] as &[int])`
+`fn foo_arr<static N: uint, static M: uint, T>(a: &[T, ..N], b: &[T, ..M])` doesn't unify with `fn foo<T>(a: &T, b: &T)`
+can we do anything?
+
+`impl Foo for ~Trait` is illegal not a problem, because instead you should newtrait:
+trait Trait2[: Trait1] { /* copy of Trait1 */ }
+impl<T: Trait1> Trait2 for T { ... }
+
+`fn foo(arg: Ref<Trait>)` is semantically equivalent to `fn foo<ref T: Trait>(arg: Ref<T>)`
+so it could in fact be specialized in the same way (use attributes: #specialize, #specialize(never)?)
+this is very similar to the way &T is desugared to an anonymous lifetime parameter!!
+do we also want `impl Eq for &T` then? seems to make sense
+lifetimes are ignored, but array lengths are compared
+does `struct Foo { x: &int }` make any sense though?
+if you don't know the lifetime, what can you do with it?
+in fns it's implicitly `exists 's: 's <: 'fn. &'s T`?
+is there any "minimum lifetime" than can be assumed in other contexts?
+if the minimum lifetime has to be explicit, then nothing is gained
+in fact in `&'s T` 's is _already_ a minimum lifetime
+in f(&x), it's ... ?
+in structs etc, it's "at least the lifetime of the containing structure"? (specified how?)
+e.g. in &[&int], should allow &ints with different lifetimes, at least that of the &[]
+but this is handled by subtyping!
+
+what about `impl Eq for &[T]` and `impl Eq for &Str`? are these any less bad?
+`impl Foo for &Trait` implies not being allowed to write any other `impl Foo for &T` (including any other `impl Foo for &OtherTrait`)??
+
+10. given `impl Foo for [T]`, when/how does `impl<ref T: Foo> Foo for &T` apply to `&[T]`?
+
+
+11. how to handle operations on SST types? what operations are even possible?
+- indexing Rc<[T]>
+impl<T: Index<Elem>> Index<Elem> for Rc<T> {
+}
+or should this happen automatically?
+- calling methods on Rc<Trait>
+how to distinguish methods on Rc from methods on Trait?
+operator ->...
+
+
+
+
+NON-ESSENTIAL
+- allow uints in generics
+  `impl Trait for [T]` subsumes and conflicts with all other `impl Trait for [T, ..N]`
+  basically you could have impl Trait for _either_ [T] _or_ forall N. [T, ..N] _or_ for specific [T, ..NUM]
+- allow `struct FooN<static N: uint>`, `&FooN`
+  -> str as library
+  BIC string literals are unboxed rvalues
+  could do `trait FromStringLiteral { fn str<static N: uint>(s: [u8, ..N]) -> Self; }`
+  and pattern matching could be sugar for if ==
+  but breaks constant expressions
+- allow `&Bar<FooN>`, `&Bar<FooT<Trait>>`
+- allow `impl Trait for FooN`
+  considered "even more general" than `impl<static N: uint> Trait for FooN<N>`
+- QUESTION (how) do compound existentials work?
+  this is &[T] -> &ToStr
+  related to the impl Trait for [T] question?
+  try desugaring it
+
+FUTURE
+- allow not just uints in generics (outer frontier: all POD types?)
+  - could allow e.g. struct HashMap<K, V, static hash_fn: fn(&K) -> uint> { ... }?
+- allow more flexible "placement" of the existential, e.g. `&mut &Trait` repr. as (&mut &_, impl) instead of (&mut &(_, impl))
+  you can do this as just: `struct Blah<ref T> { x: &mut &T }`, `Blah<Trait>`
+- allow existentially quantifying multiple things, e.g. `&(Trait1, Trait2)`, `&([T], [U])` ???
+- allow using generic methods (`ref T`) in trait objects
+- allow polymorphic recursion
+- allow explicit existentials in structs: struct Foo { type T: Trait, foo: ~T }
+- allow higher-rank functions: for<ref T> fn(x: &T) -> ...
+
+trait Any {
+    static id: [u64, ..2];
+}
+
+fn cast<A: Any, B: Any, type<ref type> F>(obj: F<A>) -> Option<F<B>>;

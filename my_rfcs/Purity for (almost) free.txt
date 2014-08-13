@@ -1,0 +1,321 @@
+## Purity for (almost) free
+ - requires changing very little
+ - the goal is only to know what functions _can't_ do
+ - what we choose to require is that bare functions and closures with immutable environments can't do IO without having an IO permission passed in
+ - we achieve this by passing around IO capabilities/permissions, which can only be duplicated given unique/mutable access
+ - in other words IO caps can be passed either by-move or (implicitly) cloned from &mut borrows, but are neither Copy nor Clone
+   - need to be careful that `static mut`s don't allow any way to subvert it!
+ - philosophical justification:
+   TODO! consider the general case (not just closures but &mut references and existential quantification, private types, etc. in general)
+   - Haskell doesn't _have_ anything other than closures with immutable environments
+   - => therefore, even if only those are pure in Rust, we're at least as good as Haskell
+   - Clean's `World` is linear/affine because it is lazily evaluated and needs to enforce an execution order
+   - Haskell does the same thing with `State#` but has to hide it behind an `IO` monad because it doesn't have linear types
+   - => Rust is strictly evaluated and has linear/affine types
+   - `&mut T` is non-cloneable to enforce unique access to the referent
+   - but having unique access to the Outside World is by definition impossible
+   - => therefore allowing it to be cloneable under `&mut` is OK
+ - the type system does not have to change at all
+ - no effect typing, no polymorphism, just passing around IO caps in arguments
+ - all closures with mutable environments are untouched
+ - all function calls are untouched
+ - only "top-level" functions which actually do IO need to be changed to take an IO cap
+   - immutable closures, trait objects, and `fn` pointers need to take an `IO` cap, if they do IO
+   - how many of these are there?
+ - (main() receives an IO cap)
+ - traits are also mostly untouched, or improved
+ - e.g. Eq and Ord _shouldn't_ do IO
+ - for Iterator, iterators which do IO can store the IO cap, and next() takes &mut self so they can use it
+ - types like Reader and Writer could either take an IO cap in their constructors and store it, or take an IO cap on each method
+   - if the destructor does IO, they probably need to take it in the constructor and store it?
+ - the only hard part is figuring out sugar for implicitly passing (&mut-cloning) the IO cap, and/or whether to implement it as a general mechanism
+   - type-based? (declare that `struct IO` is always passed implicitly)
+   - function-based? (allow declaring function args which are passed implicitly)
+     - like GHC's ImplicitParams?
+     - or search the calling context, pass implicitly if exactly 1 value of matching type is in scope, or if at least 1 is && type is zero-sized?
+     - (like Scala implicits ... ?)
+   - just hard-wire it?
+     - => probably the wisest choice for now?
+     - still need to figure out syntax 
+       - `fn print(s: &str, use IO);`
+         - `fn print_with(s: &str, printer: fn(&str, use IO))`
+       - `fn print(s: &str) effect IO;`
+         - `fn print_with(s: &str, printer: fn(&str) effect IO)`
+       - `fn print(s: &str) do IO;`
+         - `fn print_with(s: &str, printer: fn(&str) do IO)`
+       - `fn print(s: &str) does IO;`
+         - `fn print_with(s: &str, printer: fn(&str) does IO)`
+   - CONSTRAINT: Should work for closures i.e. trait objects in general! (&mut FnMut...)
+   - CONSTRAINT: Should also work for e.g. STM?
+     - type-based is the only one which obviously satisfies these?
+   impl Env/Capability/... for IO/STM/... { }?
+     built-in trait
+     have a method `dup(&mut self) -> Self`? or dup(self) -> (Self, Self)?
+ - and potentially extending it to a hierarchy of caps:
+   - effects observable only:
+     * within this function (trivial)
+     * within this task: {Ref,}Cell
+     * within this process: Arc, Atomic, spawn(), channel()
+     * the whole "outside world": IO
+   - allows e.g. starting tasks which cannot do external IO, only internal communication
+   - would require a system for implicitly translating caps to sub-caps (explicitly would be too painful)
+   - how much do we want this? Haskell only has IO.
+   - => it's probably simpler to just have IO.
+        could the others be added backwards-compatibly?
+ TODO need to work through various use cases! debug_assert!(), Lazy<T>, STM, rewrite rules, parallelization?, to see if all of this is truly sufficient
+ QUESTION would this also help with e.g. pattern matching via `Deref`*? 
+   definitely for plain `Deref`, maybe less so for `DerefMut`
+ "Ask not what you can do for purity, but what purity can do for you"
+ Q: "But what about logging?!"
+ A: "Just pass in a (reference to) the logger!" (you should do this anyways)
+ Q: "What about random number generation?"
+ A: ...
+ "purity" just devolves to not being able to access global mutable state?
+.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+OLDER:
+ - Proposal:
+   have a zero-sized linear type `IO`
+   any fn with (potentially-)globally observable effect must take `IO` as argument
+     this includes `Cell` and `RefCell`
+   main() gets passed an `IO`
+   there is an implicit or explicit `dup_io(&mut IO) -> IO` mechanism
+     also an `unsafe fn unsafe_io() -> IO` or similar, like Haskell's `unsafePerformIO`
+     maintaining purity is the burden of the programmer
+     (Rust has much better support for mutation inside pure functions than Haskell: how often would this still be necessary?)
+   therefore, `fn` and `trait Fn`, if they do not take `IO` as argument, can only be pure
+   `FnMut` and `FnOnce` can do IO by capturing `IO` in their closures
+     HOFs "just work"
+     a pure fn taking an `FnMut` closure may have exactly the effects of the closure
+     -> effect polymorphism "for free" (?)
+   potentially have a system for sub-effects, e.g. `io_to_comm(IO) -> Comm`, but *not* `comm_to_io(Comm) -> IO`
+     then you can spawn a task which may only do intra-process communication, but no external IO
+     Cell/RefCell could take `Mem`? or `Task`?
+       what's the use case for this though?
+       do you ever have `Task` but not `Comm`?
+       (starting a task which can't have any external effect is pointless)
+     essentially visibility scopes?
+       this function (pure functions: handled by lifetimes)
+       this task     (Cell/RefCell: struct Task?)
+       this process  (inter-task communication: struct Comm?)
+       whole world   (general input/output: struct IO?)
+       i.o.w.: an Environment? Task, Process, World?
+   language support would only be necessary to provide sugar
+     BIG QUESTIONS how would this work?
+     two areas:
+       in `fn` signatures (also closures?)
+       when calling `fn`s and closures
+       (the latter is more important!)
+     would these be tied together, or independent?
+       can you call a with-sugar-declared fn without sugar?
+       can you call a without-sugar-declared fn with sugar?
+     generically for various effects, or just IO?
+       generic would be nice
+       but how does the compiler know you can get `Comm` from `IO`?
+       use Coercible?
+     is this kinda related to ImplicitParams in GHC?
+       infer the argument from the available bindings in the environment
+       just like with Overlapping/IncoherentInstances:
+         choose one arbitrarily _only_ if the type is empty (contractible:) and it makes no difference
+         if it has any members, there must be exactly one available option
+         handle "subeffects" by taking automatic coercions into consideration?
+         generalized, this is a unification of Haskell type classes and Scala implicits?!
+         (IO & friends are runtime, instances/impls are compile time)
+     keywords: maybe `use`? `effect`? `do`? `does`?
+       needs to work for both top-level `fn` decls and closure types
+.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+EVEN OLDER:
+ - Clean does this
+ - Rust already has linear types
+ - `type io`, `sizeof::<io>() == 0`
+ - fn print(io: io, s: &str) -> io;
+   - GHC's IO monad is exactly this
+ - The borrow checker also helps:
+ - fn print(io: &mut io, s: &str):
+ - `sizeof::<&mut io>() != 0`!!
+ - just define io => &mut (old) io?
+   allow `&mut World` with sizeof > 0
+   but also provide monomorphic World-borrowing type with sizeof = 0
+   borrowing means can't send between tasks!
+   but can still do IO threads vs. non-IO threads
+ - interpretation: "~pointer or &mut pointer to outside world"
+   - but we don't actually need to enforce unique access for safety?
+     - enough if `io` is copyable, just not constructible?
+     - (`static mut` is unsafe anyways?) is this sufficient? can smuggling be outlawed?
+     - does a linear type actually help to outlaw smuggling?
+   - what other manipulations would this allow?
+     - split into e.g. io_file, io_gui like Clean?
+       - doesn't seem so principled... (but it works for Clean?)
+       - resembles e.g. MonadFile, MonadGui in Haskell... is there a correspondence?
+       - unnecessary if `io` is copyable? (but helpful?)
+ - do you ever want to store `io` in a data structure?
+ - any way to make the parameter passing implicit? (== state monad? reader monad?)
+ - what about tasks??
+   - (a) discard sequential ordering of effects, just care about purity
+     - `io: !Send` ?!
+     - does `io` even need to be linear in this case?!
+     - defined order of effects is trivial under strict evaluation?
+     - but not with tasks
+   - (b) enforce sequential ordering, only one task does I/O at a time, pass capability around
+ - use effect typing when monomorphic, explicit argument passing when poly?
+ - USE CASES:
+   - how does this let us say "only pure functions allowed"?
+     - fn sort_by<T>(arr: &mut [T], cmp: fn(&T, &T) -> Ordering)
+     - cmp doesn't have an `io` parameter, therefore pure
+       - what if T is e.g. (int, io)? 
+   - how does this let us abstract over pure and impure functions?
+     - fn mapM<T, U, Env>(x: &[T], env: Env, f: fn(&T, Env) -> (U, Env)) -> (Env, ~[U])
+       - Env is either () or `io` (or other things?)
+     - OK: now can we do it nicer?
+     - fn mapM<T, U, Env>(x: &[T], env: "&mut Env", f: fn(&T, "&mut Env") -> U) -> ~[U]
+     - mapM -> map_with_env
+     - is this nice enough?!  
+ - could have functions like e.g. maybe_log(io: Option<io>)? (this is just Option<io>.map(log)?)
+ - important part: extern functions (FFI). would need to model IO-ness accurately, like in Haskell.
+ - how would(n't) this solve the "logging problem"?
+ - problem: what if `io` is captured in a closure/trait object!!
+   - less of a problem if `io` is linear... but still a problem?
+   - `&Fn` couldn't do io
+   - `FnMut`, `FnOnce`?!
+   - special rules about using `io`/`io_cap` through &mut, &move?
+ - need to ensure: `fn() -> int` doesn't side effect, just returns an int; `fn(io) -> int` can side effect
+   - fn, fn mut, fn once/move distinction... fn io?
+   - i.o.w. `io` can't be in a closure, need a different trait/method (but want?)
+ - is all that's needed for IO primitives to require `io` as an arg, and for functions to not have access to anything besides their args?
+ - in closures `&Fn` might still use Cell or something :-(
+ - SOLUTION make Cell require io!
+   - local effects are delimited by lifetimes, global ones require io
+ - QUESTIONS `ST RealWorld` interpretation -> should IO be a lifetime?!
+   ST is also based on `State# s`, which is a linear type
+   basically this means we could make `&mut 's` POD if we had a separate linear `State 's` type required to use it?
+      seems to satisfy the "only one of them is live at any given time" requirement... ?
+   how does this relate to `static mut`?
+   does it allow `RefCell` without the runtime borrow check?!
+     how exactly... ?
+     would this defeat the purpose?
+     IORef is equivalent to Cell, not RefCell, Haskell doesn't have borrowing
+   is 'io equivalent to 'static?!
+   ----
+   is `&mut 'static World` the type we're looking for... ?
+   `&World` means the world is immutable -> this corresponds to pure functions!
+   no it doesn't! it means you can read from it, but not one can write!
+     but the World can change spontaneously, so the best you can do is &const/&volatile
+     so maybe this doesn't make sense / isn't worth having
+     but this is also true of `&mut`!!! rest-of-world can still do stuff
+     is there an interpretation where we don't care... ?
+ - QUESTION [how] should sugar be done for HOFs?
+ - should have at least one thing that depends on purity for correctness, so people can ask "would this break _?" for unsafe code
+ - ACID TEST: lazy evaluation (suspend()?)
+   - is it OK to allow general lazy eval if we have purity?
+   - fn new_gc<T>(x: lazy T) -> Gc<T>?
+   - but lazy ~= FnOnce, and once fns can capture `io` in their closures... ?
+     - it's *`new_gc`* that would be pure!
+     - but you can't tell that from looking at it as an expr...
+   - fn new_gc<T>(x: OnceFn() -> T) -> Gc<T>
+   - and what about bottoms
+   - two variants: a pure Lazy that can be evaled in pure code, and an effectful one that can't?
+     Fn / FnOnce
+ - ACID TEST: STM
+ - ACID TEST: rewrite rules
+ - ACID TEST: free theorems
+    forall f g. fmap f . fmap g = fmap (f . g)
+    fmap id = id
+ - ACID TEST: automatic parallelization?
+ - should `FnMut` / `FnOnce` closures be able to do IO by storing `World` in their closures?
+   does allowing it mean that we get `mapM` etc. "for free"?
+     test case: STM
+       STM wants *neither* mutation of external things, nor IO
+       so this would seem to point in that direction
+       but what would an STM computation actually look like?
+       what if: there's an affine `struct STM` alongside `IO`, which can only be accessed in STM transactions?
+       so: `fn atomically<T>(transaction: &Fn(STM) -> T) -> T`?
+       how to prevent the `STM` from leaking out? use a lifetime?
+         is this still as general as STM in Haskell?
+         if we say `struct STM<T>(for<'s> &Fn(STM_Cap<'s>) -> T)`, is that ~ Haskell's `data STM a`?
+           in Haskell you never see the STM_Cap, so maybe?
+       so: `fn atomically<T>(io_cap: IO_Cap, transaction: for<'s> &Fn(STM_Cap<'s>) -> T) -> T`?
+       could also have a `Comm_Cap` for intra-process communication
+         implied by IO_Cap, unlike STM_Cap
+         then you can have can communicate but don't do any external IO
+       how far can sugar for this be generalized? is it still simpler than effect typing?
+     what about laziness, rewrite rules, free theorems?
+     we still want "&mut 's FnMut only affects state inside 's"?
+      for the case of calling `&mut FnMut` inside `&Fn`, it still works, because `&Fn` doesn't have IO access to pass on
+          this hints at beautiful compositionality... ?
+     do we want to be able to say `~FnMut` / `OnceFn` can't do IO?
+       it can only do IO if nobody else can... ?
+       is this enough?
+         well it means no one else can observe you doing the IO, so...
+       if following the `&mut World` model, `~FnMut` can only store it if `~FnMut:'s`, which reduces to the same thing
+       does `main()` get `&mut World` or `&mut 'static World`??
+       &mut 'static == &move 'static
+     what if we want ~FnMut that _can_ do IO??
+       doesn't work so well with the World-borrowing idea...
+       what then is the difference between `&mut FnMut()` and `&mut FnMut(IO_Cap)`?
+     our options:
+       1. `#no_copy struct IO_Cap;`
+          totally linear, can only be passed explicitly or in `FnOnce`
+       2. `#no_copy struct IO_Cap<'s>; fn borrow_io_cap<'s>(&'s mut IO_Cap) -> IO_Cap<'s>;`
+          can also be used in `&mut FnMut`
+          also enforces linearity?
+       3. `#no_copy struct IO_Cap; fn dup_io_cap(&mut IO_Cap) -> IO_Cap;`
+          can also be used in `~FnMut`
+          doesn't enforce linearity, just that &Fn can't use it
+      probably go for 3. unless there's a compelling reason against
+   if not, how to prevent it?
+     (should World be borrowable at all?)
+ - a closure is pure if it can only access an immutable environment
+   can apply the same logic to exprs: (they are like unboxed closures)
+     e.g. expr argument of assert!() can only borrow immutably, therefore can't have effects that might be erased
+ - Rust equivalent of Haskell's:
+   `IO a`   ->
+   `ST s a` ->
+   `STM a`  ->
+
+fn fmap<F: Functor, A, B>(self: F<A>, f: &Fn(A) -> B) -> F<B>
+fn id<T>(x: T) -> T
+x.fmap(id) = id(x)
+x.fmap(g).fmap(f) = x.fmap(comp(f, g))

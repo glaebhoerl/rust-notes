@@ -1,0 +1,181 @@
+- Start Date: 2014-07-17
+- RFC PR #: (leave this empty)
+- Rust Issue #: (leave this empty)
+
+
+# Summary
+
+Make a distinction in the language between types which are "just data" (such as `Option`, `Ordering`, and `Point`) and types which represent abstraction boundaries (such as `Box`, `Cell`, `HashMap`, and `Vec`). The built-in traits are automatically propagated over "just data" types, and must be explicitly re-introduced at abstraction boundaries. Doing so improves abstraction, modularity, safety, and convenience, and also eliminates an egregious soundness violation in the current language.
+
+Potentially also: 
+
+ * Generalize the mechanism for the current built-in traits, enabling them to be implemented in library code.
+ 
+ * Add "closed traits" with private-by-default methods.
+
+ 
+# Motivation
+
+Rust has recently run into an issue where convenience and correctness are seemingly at odds: if the built-in traits (`Copy`, `Send`, `Sync`) are automatically derived for types based on their contents, then types which use private fields and `unsafe` code behind the scenes become unsafe by default; while if they need to be derived or `impl`ed explicitly, then simple data types like `struct Point { x: int, y: int }` become laborious to "fully declare", whereas one would like them to "just work". There were suggestions to distinguish between types which have `priv` fields and ones which don't, but it seems surprising that adding or removing a `priv` field would affect the behavior of the type in such a way.
+
+Rust is not the only language which has encountered this problem: recently, so has Haskell. The issue in Haskell's case is quite similar, and arose after they, like us, added a built-in, automatically derived trait. In their case, this was the `Coercible` type class (which served as the basis for the similarly-named proposal for Rust). In Haskell's case, the dilemma was about having to declare the roles of type parameters. If a type parameter has a representational role, it can be `coerce`d (transmuted) to a different type with the same representation (e.g. a `newtype`). Type parameters with a nominal role, however, cannot. If the default is for type parameters to be representational, then this means, for instance, that types like `Map k v` and `Set k` can be transmuted to different key types with different `Ord` instances, breaking their internal invariants, unless the library author adds explicit nominal role annotations to prevent this. On the other hand, if nominal is the default, then every "plain old" generic datatype would need representational role annotations to become useful with `Coercible`, which most of them want to be, and this would be quite burdensome. There were some suggestions to make the default depend on whether the type's constructors are exported from the module, but this was considered to be inappropriate, because role annotations live at the type system level, while exports and imports are a more primitive, module (name resolution) level mechanism. Selected emails from the Haskell and GHC mailing lists on this topic:
+
+ * Email
+
+ * Email
+
+ * Email
+
+In each case, the problem is that the language has no notion of abstraction boundaries at the semantic level, and only provides the programmer with the primitive mechanism of selectively exporting names from a module for maintaining internal invariants. However, the programmer *knows* whether she intends a type to be "just data" or to represent an abstraction boundary: she just has no good way to express this to the compiler.
+
+The solution is therefore straightforward: Add a way.
+
+
+mention Transmute!
+
+connection between abstraction and safety
+internal invariants are sometimes "just" correctness, but sometimes (with `unsafe` code) also implicate memory safety
+if correctness is always maintained, then safety is also always maintained
+if correctness can be violated, then safety can also be violated where `unsafe` code is involved
+=> let's maintain correctness
+
+
+ * Adding or removing private `struct` fields should never break client code. In other words, modules which can't see private fields should not be able to observe their presence *or* absence.
+
+ * The default should always be safety and correctness; it shouldn't be opt-in.
+ 
+ * Abstraction and encapsulation should be represented at the semantic level, rather than merely the syntactic one.
+
+ * Functional struct updates currently subvert abstraction, and thus safety ([#???][github-issue]). This should be fixed.
+
+ * It should be convenient to create types which are "just data" (such as the usual `struct Point`).
+
+ * `enum` variants should be private by default, the same as everything else.
+
+
+[github-issue]:
+
+
+# Detailed design
+
+core: different ways for declaring "just data" and abstract types
+
+2*2 variations on syntax and semantics, I would be happy with any of them
+
+"data struct"     `struct`          `data struct` `struct`
+
+"data enum"       `enum`            `data enum`   `enum`
+
+"abstract struct" `abstract struct` `struct`      `class`
+
+"abstract enum"   `abstract enum`   `enum`        ??`enum class`??
+
+Variations for fixing `Vec { ..v }` problem:
+
+  * `v` is considered moved from
+
+  * the wildcard-fields are considered move-only(?)
+  
+  * prohibit FSU on types with Drop
+  
+  * prohibit FSU on abstract types
+  
+  * prohibit using constructors of abstract types
+
+opt-in built-in traits
+
+More complicated variant: external code can use constructors, but 
+wildcards are mandatory
+those fields are assumed to be non-Copy?
+all `pub` fields of tuple structs must be at the beginning
+
+Simpler variant: 
+only code that can see private fields can use constructors
+
+mention private unit structs?
+
+
+This is the bulk of the RFC. Explain the design in enough detail for somebody familiar
+with the language to understand, and for somebody familiar with the compiler to implement.
+This should get into specifics and corner-cases, and include examples of how the feature is used.
+
+
+## Interaction with `Transmute`
+
+(just like another built-in trait?)
+
+for: newtypes, generic newtypes, phantom type parameters
+alpha-renamed types?
+subtypes?
+
+
+### Optional add-on: `data trait`
+
+empty, non-generic trait
+
+automatically derived by all types which don't conceptually require abstraction barriers to implement
+u8..u64, i8..i64, int, uint, char, [T, ..N] (all of these are just algebraic data), *not* &, &mut (what about `fn`?)
+*T too?
+all `data struct`s and `data enum`s which only contain members also implementing the `data trait`
+must be explicitly implemented at abstraction boundaries (`&`, `&mut`, `struct`, `enum`)
+
+QUESTION if I declare a `data trait Foo` and `impl<T> Foo for Box<T>`, should it check the private fields of `Box<T>` for compliance?
+  (a) always check private fields => breaks abstraction
+  (b) never check private fields => breaks safety (`unsafe impl`?)
+  (c) check private fields, but only allow impl in module owning type => breaks modularity/compositionality/flexibility/whatever
+Should be possible to write impls checked for safety by the compiler. `deriving`?
+
+what's the relationship to `unsafe trait`s??
+
+also has significance for being able to write `&(Trait + DataTrait)`
+
+nice mnemonic (but only with the `data struct` / `data enum` syntax variant)
+
+simple, solves the problem
+
+narrowly targetted
+
+recommendation: feature gate
+
+
+### Optional add-on: closed traits
+
+link motivation from no-privates-in-public
+
+only real question is syntax
+
+`abstract trait`?? `trait class`??
+
+
+# Drawbacks
+
+An additional distinction that has to be learned. But this is essential/inherent complexity and we are just faithfully modelling it.
+
+Adds a keyword (`data`, `abstract`, or `class`).
+
+Why should we *not* do this?
+
+
+# Alternatives
+
+What other designs have been considered? What is the impact of not doing this?
+
+
+# Unresolved questions
+
+which syntax
+
+simpler or more sophisticated variant
+
+whether to add `data trait`
+
+whether to add closed traits, and with what syntax
+
+What parts of the design are still TBD?
+
+
+# Future work
+
+? roles/variances (together with Transmute) (remove subtyping?)
+
+
