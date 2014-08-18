@@ -7,28 +7,44 @@
    - need to be careful that `static mut`s don't allow any way to subvert it!
  - philosophical justification:
    TODO! consider the general case (not just closures but &mut references and existential quantification, private types, etc. in general)
+   (but feels like it should be fine)
    - Haskell doesn't _have_ anything other than closures with immutable environments
-   - => therefore, even if only those are pure in Rust, we're at least as good as Haskell
-   - Clean's `World` is linear/affine because it is lazily evaluated and needs to enforce an execution order
-   - Haskell does the same thing with `State#` but has to hide it behind an `IO` monad because it doesn't have linear types
-   - => Rust is strictly evaluated and has linear/affine types
-   - `&mut T` is non-cloneable to enforce unique access to the referent
-   - but having unique access to the Outside World is by definition impossible
-   - => therefore allowing it to be cloneable under `&mut` is OK
+   - => therefore, even if only those are pure in Rust, then we're at least as good as Haskell
+   - GHC's IO monad is just `State# RealWorld -> (# State# RealWorld, a #)`
+     or without the noise: `World -> (World, a)`
+     State#/World must be used linearly, but GHC can't enforce it, so needs to hide it behind an `IO` monad
+   - => but Rust does have linear/affine types!
+   - Clean also has linear/affine/uniqueness types, so exposes World directly
+     `World` is linear/affine because Haskell and Clean are lazily evaluated and need to enforce an execution order for IO
+   - => but Rust is strictly evaluated, so there's no need for this! (it's free)
+   - in Clean and Haskell, State#/World has two purposes:
+     * enforce an execution order, and
+     * make sure you can only do IO if you have the State#/World
+   - => in Rust, we only need the latter
+   - => therefore: `State`/`World`/`IO`/whatever is cloneable given unique access
+   - can think of it as `&mut RealWorld`, i.e. a mutable reference to the outside world
+   - normally `&mut T` is non-cloneable, to enforce unique access to the referent
+   - but having unique access to the Outside World is by definition impossible!
+   - => therefore, allowing the IO cap to be cloneable under `&mut` is OK!
  - the type system does not have to change at all
  - no effect typing, no polymorphism, just passing around IO caps in arguments
+ - could do it entirely in library code, except for sugar
  - all closures with mutable environments are untouched
  - all function calls are untouched
  - only "top-level" functions which actually do IO need to be changed to take an IO cap
    - immutable closures, trait objects, and `fn` pointers need to take an `IO` cap, if they do IO
    - how many of these are there?
- - (main() receives an IO cap)
+ - Cell, RefCell, and other "internal mutability" things need to take IO caps for their methods
+   - QUESTION! if Cell takes IO cap in constructor and stores it instead, is that bad? why?
+   - ANSWER! even if stored, couldn't use it from an & borrow!
  - traits are also mostly untouched, or improved
  - e.g. Eq and Ord _shouldn't_ do IO
  - for Iterator, iterators which do IO can store the IO cap, and next() takes &mut self so they can use it
  - types like Reader and Writer could either take an IO cap in their constructors and store it, or take an IO cap on each method
    - if the destructor does IO, they probably need to take it in the constructor and store it?
- - the only hard part is figuring out sugar for implicitly passing (&mut-cloning) the IO cap, and/or whether to implement it as a general mechanism
+ - main() gets passed an IO cap
+ - and of course `unsafe fn unsafe_io() -> IO` (...have `unsafe static`?)
+ - the only hard part is figuring out sugar for implicitly passing (&mut-cloning) the IO cap, and/or whether to implement it as some kind of general mechanism
    - type-based? (declare that `struct IO` is always passed implicitly)
    - function-based? (allow declaring function args which are passed implicitly)
      - like GHC's ImplicitParams?
@@ -46,35 +62,91 @@
        - `fn print(s: &str) does IO;`
          - `fn print_with(s: &str, printer: fn(&str) does IO)`
    - CONSTRAINT: Should work for closures i.e. trait objects in general! (&mut FnMut...)
-   - CONSTRAINT: Should also work for e.g. STM?
-     - type-based is the only one which obviously satisfies these?
-   impl Env/Capability/... for IO/STM/... { }?
-     built-in trait
-     have a method `dup(&mut self) -> Self`? or dup(self) -> (Self, Self)?
+   - CONSTRAINT: Should also work for e.g. STM cap?
+   - type-based is the only one which obviously satisfies these?
+   - impl Env/Capability/... for IO/STM/... { }?
+     - built-in trait
+     - have a method `dup(&mut self) -> Self`? or `dup(self) -> (Self, Self)`?
+     - `&mut` entails `let mut`, `&uniq` would be more appropriate
+     - the second version also only works with `let mut` or if you make new `let`s each time...
+     - but alternative is just compiler magic (which is involved anyway)
+     - so then: &Fn(int, IO)? or special syntax? what/how?
  - and potentially extending it to a hierarchy of caps:
    - effects observable only:
-     * within this function (trivial)
+     * within this function (trivial, default)
      * within this task: {Ref,}Cell
      * within this process: Arc, Atomic, spawn(), channel()
      * the whole "outside world": IO
    - allows e.g. starting tasks which cannot do external IO, only internal communication
-   - would require a system for implicitly translating caps to sub-caps (explicitly would be too painful)
+   - would require a system for implicitly translating caps to sub-caps (explicitly would be too painful, e.g. have IO, want to use Cell)
+     - impl SubCapOf<IO> for Comm?
+     - this doesn't actually seem that bad, if it works
    - how much do we want this? Haskell only has IO.
    - => it's probably simpler to just have IO.
         could the others be added backwards-compatibly?
- TODO need to work through various use cases! debug_assert!(), Lazy<T>, STM, rewrite rules, parallelization?, to see if all of this is truly sufficient
- QUESTION would this also help with e.g. pattern matching via `Deref`*? 
-   definitely for plain `Deref`, maybe less so for `DerefMut`
+ TODO need to work through various use cases! 
+  * debug_assert!()
+  * Lazy<T>
+  * STM
+  * rewrite rules
+  * parallelization?
+ to see if all of this is truly sufficient.
  "Ask not what you can do for purity, but what purity can do for you"
+ QUESTION would this also help with e.g. "cleanness" of pattern matching via `Deref`*? 
+   definitely for plain `Deref`, maybe less so for `DerefMut`
  Q: "But what about logging?!"
  A: "Just pass in a (reference to) the logger!" (you should do this anyways)
  Q: "What about random number generation?"
- A: ...
+ A: probably the same thing. boohoo.
  "purity" just devolves to not being able to access global mutable state?
 .
 
 
+### ACTUAL PROPOSAL:
 
+#[lang(capability)]
+pub trait Capability: sizeof(Self) = 0 {
+    type Super: Capability = Self;
+}
+
+// magical wired-in:
+pub fn dup<Cap: Capability>(cap: &uniq Cap)        -> Cap;
+pub fn sub<Cap: Capability>(sup: &uniq Cap::Super) -> Cap;
+
+// actually exposed:
+pub fn {dup, sub} as above, except: &mut Cap, or Cap -> (Cap, Cap)
+
+LANGUAGE DEF:
+Whenever 
+ * A function expects an argument of type `Cap` where `Cap: Capability` as its last argument, and
+ * The argument is omitted by the caller, then:
+ * If a value of type `Cap` is available in the caller's context, it is implicitly `dup()`ed, or
+ * If a value of type `Cap::Super` is available, then it is implicitly `sub()`ed,
+ * Then the result is implicitly passed in place of the omitted argument.
+
+pub unsafe fn unsafe_cap<Cap: Capability>() -> Cap;
+
+pub struct Mut  { priv marker: NonCopy }
+pub struct Comm { priv marker: NonCopy }
+pub struct IO   { priv marker: NonCopy }
+
+impl Capability for Mut  { type Super = Comm; }
+impl Capability for Comm { type Super = IO;   }
+impl Capability for IO   {                    }
+
+// LANGUAGE DEF:
+ * Functions which do not have unique access to any Cap must be referentially transparent.
+   TODO make this precise w.r.t &, &mut, etc.!
+ * Functions which do not have unique access to a Comm may not have effects outside of the current task.
+ * Functions which do not have unique access to an IO may not have effects outside of the current process.
+QUESTION: do the last two need to be in the language def, or can it be left up to `std`?
+QUESTION: should FFI (`extern` blocks) have any compiler-enforced restrictions?
+QUESTION: do we need to do anything special w.r.t. `static mut`?
+
+fn main(IO) { ... }
+
+pub struct UnsafeCell<T> { ... }
+pub fn unsafe_get_mut<T>(cell: &UnsafeCell<T>, Mut) -> *mut T;
 
 
 

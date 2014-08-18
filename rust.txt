@@ -40,13 +40,16 @@ Philosophy
       * QUESTIONS: is seeing names from outer scopes still deterministic? why?
         what's the precise definition of "deterministic"?
         how to handle autoref/autoderef?
+        TODO look at niko's prototype!
     * Closure reform (SUBMITTED BY nikomatsakis)
   # BIC
     * Make inline `mod`s obey normal scoping rules
       QUESTION what should non-inline be called? just `mod foo;`? `extern mod foo;`?
-      QUESTION require :: to refer to top-level `use`? probs yes
-    * `data struct`, `data enum`, tighten privacy (99% FIGURED OUT)
-    * Remove subtyping (QUESTION: lifetimes)
+      ANSWER perhaps always `extern mod foo;` and `mod inline_foo { ... }`, no mixing.
+      QUESTION require :: to refer to crate root in `use`? probs yes
+      or not? should crate root be the default?
+    * `data struct`, `data enum`, tighten privacy (IN PROGRESS)
+    * Remove subtyping and variances (only sublifetimes, but not sub*type*s)
     * Automatic coercions reform
     * Linear types (QUESTION: unwinding)
     * Parametricity
@@ -57,37 +60,42 @@ Philosophy
         or just have a `sizeof` operator which is `unsafe`?
       * QUESTION how to deal with Drop? require it explicitly?
     * Checked arithmetic (SUBMITTED)
-    * Ban private items in public signatures (SUBMITTED)
+    * Ban private items in public signatures (ACCEPTED!)
     * Tighten shadowing rules (SUBMITTED BY Kimundi)
     * Enforce capitalization conventions (REJECTED)
     ? *T should be non-nullable (`Option<fn()>` is *already* required in FFI!)
     * extern "ABI" -> extern<ABI> (SUBMITTED)
     * Syntax wibbles:
         Struct { f: v } -> Struct { f = v }
-        #[attr]         -> #attr (could do it BC, allow #attr and #attr(foo), but require #[attr = foo])
+        #[attr]         -> #attr (BC: allow #attr and #attr(foo), but require #[attr = foo])
         &'a mut Foo     -> &mut 'a Foo
         macro_rules!    -> macro! or define!
         name@pat        -> pat as name
         <'a> |&'a Foo|  -> for<'a> |&'a Foo|
         extern "C"      -> extern C, extern<C>, or extern(C)
-        'a              -> introduce as `scope a` or `lifetime a`, use as just `a`
-        Foo<T>          -> Foo(T)
-        foo::<int>(arg) -> foo@(int)(arg)
+        'a              -> introduce as `scope a` or `lifetime a`, use as just `a`?
+        Foo<T>          -> Foo(T)?
+        foo::<int>(arg) -> foo@(int)(arg)?
+        |a, b| a + b    -> a, b -> a + b?
+            is this unambiguous? not in contexts which also have commas, e.g. arrays, tuples
+            require parentheses in those cases?
+            (a, b -> b) is ambiguous
+            (a, b) -> b two arguments or single tuple argument?
+            probably this is hopeless :(
   # IMPORTANT
     * trait Trait1 + Trait2 (PARTIALLY IMPLEMENTED)
     * trait Transmute<T> (SUBMITTED BY gereeter)
-    * GC
+    * GC, Trace
     * &move
     * &out (SUBMITTED BY gereeter)
-    * "Unboxed trait objects" (SUBMITTED BY aturon)
+    * "Unboxed trait objects" (SUBMITTED BY aturon, POSTPONED)
     * Type ascription
-    * Associated types
+    * Associated types (SUBMITTED BY aturon)
     * Macro reform
   # MINOR
-    * Allow inferred type-wildcards in `impl` method signatures?
-    * RawUnion<A, B>
+    * UnsafeUnion<A, B> (DESCRIBED IN COMMENT)
     * Incoherent empty traits?
-    * Associated statics
+    * Associated statics (SUBMITTED BY aturon)
     * Anonymous sum types? (int|bool|char)
     * enum bool { false, true }, all two-nullary-variant enums repr.-ed the same (BIC?)
       generally: guarantee all merely-alpha-renamed structs, tuples, enums repr.-ed the same?
@@ -96,22 +104,31 @@ Philosophy
     * Scoped refutable `let`: `if let` (SUBMITTED BY kballard)
     * Expose tuple fields as .0 .1 ... .N (SUBMITTED BY P1Start)
     * Array splicing
-    * Fixed-length array slices in patterns (SUBMITTED BY _)
+    * Fixed-length array slices in patterns (SUBMITTED BY krdln)
     * Destructuring assignment
     * Disjunctive patterns in `let`s (SUBMITTED BY _, POSTPONED)
     * Liberalized destructing struct destructuring
     * Limited type inference for `static` items
     * #compact struct, enum
-    * Generalized closures for any trait, not just `Fn`* (QUESTION: syntax! `object` keyword?)
+    * Generalized object literals (closures) for any trait, not just `Fn`* 
+      QUESTION: syntax! `object` keyword?
+          closure-like syntax (||) or impl-like (fn)?
+          let foo = object (Show + Hash) {
+              show |&self| self.foo() + "foo",
+              hash |&self| self.bar() + 42
+          };
     * for<T1..TN> { ..items.. } (SUBMITTED BY _, POSTPONED)
-    * Any -> Dynamic, Arc -> AtomicRc, Option -> Maybe
+    * Naming wibbles:
+        Any    -> Dynamic
+        Arc    -> AtomicRc
+        Option -> Maybe (Optional, Nullable)
   # FAR FUTURE
     * `static` generics parameters
     * Generic generics parameters (higher-kinded types)
-    * Type currying
+    * Partial type application
     * Trait generics parameters (ConstraintKinds)
     * Kind polymorphism
-    * Polymorphic types (higher-rank types)
+    * First-class polymorphic types (higher-rank types)
     * Explicit existential quantification syntax
     * Existential quantification in structs
     * Polymorphic recursion
@@ -120,8 +137,8 @@ Philosophy
     * Datatype-generic programming (GHC.Generics)
     * Variadic generics
     * TCE
+    * Try-catch with (task-like) isolation (QUESTION: what to throw, how to catch?)
     * Delayed initialization of struct fields? (loop tying)
-    * Try-catch with isolation (QUESTION: what to throw, how to catch)
 
 ## QUESTIONS
  * What would break without subtyping for lifetimes?
@@ -132,39 +149,39 @@ Philosophy
  * Is `Arrow` connected to linear logic/types? (To closed (symmetric) monoidal categories?)
  * Is there a description/paper about UHC's implementation of existential types?
 
-## `box`
+## How `box` should work
 
-trait Alloc<Where> {
-    fn alloc<T>(what: &out Self<T>, where: Where) -> &out T;
+trait Alloc {
+    type Where = ();
+    fn alloc<T>(self: &out Self<T>, where: Where) -> &out T;
 }
 
-impl Alloc<()> for Box { ... }
-impl Alloc<()> for Rc  { ... }
-impl Alloc<()> for Gc  { ... }
+impl Alloc for Box { ... }
+impl Alloc for Rc  { ... }
+impl Alloc for Gc  { ... }
 
 struct Arena { ... }
 struct ArenaRef<'s, T> { ... }
 
-impl<'s> Alloc<&'s mut Arena> for ArenaRef<'s, ..> { ... }
+impl<'s> Alloc for ArenaRef<'s, ..> {
+    type Where = &'s mut Arena;
+    ...
+}
 
 `box(where) some_foo` =>
  * type determined by inference
- * type is `B<Foo>` such that: `some_foo: Foo` && `where: Where` && `B: Alloc<Where>`
+ * type is `B<Foo>` such that: `some_foo: Foo` && `where: Where` && `B: Alloc` && `B::Where = Where`
  * `box some_foo` short for `box(()) some_foo`
  * `B` defaults to `Box`?
- * use type ascription to fix `B` when necessary, e.g. `let boxed_foo: Rc<_> = box some_foo;` or later `box some_foo: Rc<_>`
-   HKT is important so the element type can be inferred with _; otherwise, have to specify whole type
+ * use type ascription to fix `B` when necessary, e.g. `let boxed_foo: Rc<_> = box some_foo;`, or later `box some_foo: Rc<_>`
+   HKT is important so the element type can be inferred with _; otherwise, have to specify whole type!
    question: precedence of `:`?
 
 
 some_foo: Foo
 where: Where
 --
-box(where) some_foo: forall B: Alloc<Where>. B<Foo>
-
-box some_foo
-=>
-box(()) some_foo
+box(where) some_foo: forall B: Alloc where B::Where = Where. B<Foo>
 
 box(where) some_foo
 =>
@@ -174,16 +191,13 @@ box(where) some_foo
     the_box
 }
 
-{
-    let the_box: B<Foo>;
-    let out_foo: &out Foo = the_box.alloc(where);
-    *out_foo = some_foo;
-    the_box
-}
+box some_foo
+=>
+box(()) some_foo
 
 ??
 trait Dealloc {
-    fn dealloc<T>(the_box: Self<T>, move_to: &out T);
+    fn dealloc<T>(self: Self<T>, move_to: &out T);
 }
 connection to Drop??
 
@@ -329,6 +343,16 @@ generic functions?? :(
   slices
   uniform representation
   flexible timing of returns / moves
+
+## Try-catch (exception handling)
+ - task-like isolation to ensure exception safety
+ - only difference w.r.t. returning `Result<T, Error>` is:
+   * representation (unwinding)
+   * ergonomics
+ - always throw a single type, present in the signature? (like M#?)
+ - requires explicit `throws Result<A, B>` to propagate both A and B... good or bad thing?
+ - can do something clever with existentials and/or Dynamic? (like GHC?)
+ - overall, is this worthwhile over just using Result?
 
 ## QUESTIONS
 - "optimize out" references to zero-sized structs?
@@ -674,6 +698,8 @@ https://github.com/mozilla/rust/issues/217
 
 
 ## misc features
+ - Allow inferred type-wildcards in `impl` method signatures?
+ - `fn swap<T>(self: &Cell<T>, other: &mut T)`? (no `Copy`!)
  - `EXPR is PAT: bool` operator
  - currying: foo(1) if foo is a two-arg callable thing returns a one-arg callable thing
  - refutable patterns in for loops
@@ -752,7 +778,7 @@ https://github.com/mozilla/rust/issues/217
 
 pub struct Lazy<F, T> {
     eval: fn(&mut Lazy<F, T>) -> &mut T,
-    data: RawUnion<F, T>
+    data: UnsafeUnion<F, T>
 }
 
 impl<F: Copy, T: Copy> Copy for Lazy<F, T> { }
@@ -823,49 +849,23 @@ QUESTION how can we `eval()` from multiple threads?
   By using some thread-safe version of RefCell? (look into how blackholing works!)
 
 
-## RawUnion<A, B>
-  sizeof(RawUnion<A, B>) = max(sizeof(A), sizeof(B))
-  alignof(RawUnion<A, B>) = lcm(alignof(A), alignof(B))
+## UnsafeUnion<A, B>
+  sizeof(UnsafeUnion<A, B>) = max(sizeof(A), sizeof(B))
+  alignof(UnsafeUnion<A, B>) = lcm(alignof(A), alignof(B))
   unsafe_transmute
-    A -> RawUnion<A, B>
-    B -> RawUnion<A, B>
-    RawUnion<A, B> -> A
-    RawUnion<A, B> -> B
-  impl Transmute<RawUnion<A, B>> for A
-  impl Transmute<RawUnion<A, B>> for B
-  -- is this actually OK?? A/B and RawUnion<A, B> do not have the *same* size and alignment, only compatible!
-     there's no requirement that the input and output to a function have the same size/alignment
-     instantiating `transmute` so that they are different could still be OK
-     ...but [A]: Transmute<[RawUnion<A, B>]> is definitely not OK!!
-     so maybe just lose the safe transmute impls, but still allow unsafe_transmute?
-       provide different safe constructors?
-     not HasPrefix either!!
-     &mut A: Transmute<&mut RawUnion<A, B>> is ALSO evil.
-  -- if {x, y}: RawUnion<A, B>, *x = y is unsafe!! destructors don't run
+    A -> UnsafeUnion<A, B>
+    B -> UnsafeUnion<A, B>
+    UnsafeUnion<A, B> -> A
+    UnsafeUnion<A, B> -> B
+  if {x, y}: UnsafeUnion<A, B>, *x = y is unsafe!! destructors don't run
      should it be a linear type??
-  impl<A: Copy, B: Copy> Copy for RawUnion<A, B>
-  -- or just impl Copy for RawUnion<A, B>?? or a disjunction??
+  impl<A: Copy, B: Copy> Copy for UnsafeUnion<A, B>
+  -- or just impl Copy for UnsafeUnion<A, B>?? or a disjunction??
   likewise Share, Send, etc.
-  RawUnion<_, _> is idempotent, commutative, associative
-  so we can just define RawUnion3<A, B, C> = RawUnion<A, RawUnion<B, C>>
+  UnsafeUnion<_, _> is idempotent, commutative, associative
+  so we can just define UnsafeUnion3<A, B, C> = UnsafeUnion<A, UnsafeUnion<B, C>>
     this is where constructor = transmute, instead of specialized fn, would be important
-  with type macros perhaps RawUnion!(A, B, C, D)
-  maybe we can make a trait to construct it?
-
-unsafe trait? data trait? incoherent trait??
-should be: public + incoherent + only implementable inside module + empty
-trait ConstructRawUnion<RU> { }
-
-impl<A, B> ConstructRawUnion<RawUnion<A, B>> for A { }
-impl<A, B> ConstructRawUnion<RawUnion<A, B>> for B { }
-// is this all we need??
-
-impl<A, B> ConstructRawUnion<RawUnion<A, B>> for RawUnion<A, B> { }
-impl<A, B> ConstructRawUnion<RawUnion<A, B>> for RawUnion<B, A> { }
-
-fn construct_raw_union<RU, T: ConstructRawUnion<RU>>(data: T) -> RU {
-    unsafe { transmute(data) }
-}
+  with type macros perhaps UnsafeUnion!(A, B, C, D)
 
 
 ## renames: LIB-BIC!
@@ -1100,3 +1100,7 @@ reflect :: forall (n :: Nat). Nat
 
 lens lib -> opticks, CT lib -> abstract_nonsense
 
+groupoid      <-> equivalence relation
+idempotence   <-> reflexivity
+commutativity <-> symmetry
+associativity <-> transitivity

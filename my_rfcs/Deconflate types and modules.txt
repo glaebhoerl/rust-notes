@@ -5,7 +5,7 @@ No types in paths
 
 Types and modules live in separate namespaces
 
-Remove Self and self
+Remove Self and self?
   traits are now `trait Ord<T> { fn cmp(a: &T, b: &T) -> Ordering; }`
   QUESTION should we do this? having it clear which type is Self instead of arbitrarily first/last is nice...
 
@@ -13,7 +13,7 @@ Trait type parameters always input types, output types always associated types
   already part of aturon's RFC :)
 
 Remove anonymous impls
-  use `for<T>` and typedefs instead, if wanted
+  use `for<T>` and typedefs instead, if desired
 
 trait methods and associated items live in parent scope
   do they get imported together with the trait? (what about enum variants?)
@@ -38,21 +38,28 @@ UMCS
   search first in caller's scope, then in module where type was *imported from*
   or some kind of `use mod::{Type { .. }, foo, ...}` syntax?
   but then should we put anonymous `impl`s back again?
-  
+  need to think about what the *primary* objectives are, and which are ancillary!
+
+Semantics of `.`
+  `.` is somewhat "magical"
+  autoref? (5.to_string() -> (&5).to_string())
+  autoderef? ((box 5).to_string() -> (*(box 5)).to_string())
+  TDNR?
+  look at Niko's name resolution prototype!!
 
 Benefits:
   Massively simplify resolve!
-  Simplicity, consistency, orthogonality
-  Name resolution comes before typechecking
+  Obviates UFCS complexity
+  Obviates Trait::foo vs Type::foo vs <Type as Trait>::foo complexity (esp. for associated items!)
+  Name resolution comes before typechecking(?)
   UMCS
   Removes need for "helper traits" and extraneous default methods (simplifies e.g. Iterator)
-  Obviates UFCS debate
-  Obviates Trait::foo vs Type::foo vs <Type as Trait>::foo debate
+  Simplicity, consistency, orthogonality
   80% of Rust code is shifted 4 lines leftwards
   (?) `impl Trait` greppability
+  might make it easier to have modules-parameterized-over-types or types-parameterized-over-modules in the future (e.g. ML-style modules)
 
 FUTURE:
-
 - mod<T>?
  - types and modules are distinct, but can parameterize each over the other?? (== just different kinds?)
  - mod m<type T> { static x: T } makes sense(?)
@@ -68,7 +75,11 @@ FUTURE:
  - if we ever grow ML-style module signatures, we should find a way to make `trait`s serve dual purposes
    - would you be required to write `impl Trait for my_mod`, or would it be implicit?
    - (need to investigate how ML works...)
+   - (TODO look at Ericson2314's proposal!)
    - module = input type, Self = output type?!
+   - but modules are instantiated explicitly, while trait resolution is implicit!
+   - so there may not be any input vs output type distinction for modules(?)
+     (nice duality? for types, impl explicit, resolution implicit; for modules, impl implicit, instantiation explicit)
 
 x
 x

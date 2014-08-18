@@ -1,4 +1,4 @@
-# Existential Types (ET)
+# Existential Quantified Types (EQT)
 
 Derived from SST (Statically Sized Types), which has a confusing name. I like this one better.
 
@@ -389,6 +389,7 @@ Paper: "First-class polymorphism with existential types" (MLF)
        question of whether `&exists static N: uint. [T, ..N]` is equivalent to `exists static N: uint. &[T, ..N]`
        this is the same moving-existentials-outwards question from above
        seems like it *should* be OK, but how to be sure / formulate it rigorously?
+       it's obviously OK for e.g. `Box` and `&`, but is it OK *in general*?
   what's the relationship between the "some" operator and unboxed trait objects?
     are they the same thing in any sense??
 
@@ -426,17 +427,35 @@ Allows dynamically linked polymorphic functions!
 TOREAD Implementing type classes
 http://okmij.org/ftp/Computation/typeclass.html
 
+multidimensional arrays?
+&[[T]]   => exists static N, M: uint. &[[T, ..N], ..M]
+&[Trait] => exists T: Trait, static N: uint. &[T]
 
 
+struct Vec<ref T> { data: *[T] }
+
+struct Vec<ref T> { data: exists static N: uint. *[T, ..N] }
+
+Vec<Trait>
+exists static T: Trait. Vec<T>
+repr = (Vec { (*[T, ..N], N: uint) }, &'static impl Trait for T)
+should think this example through more thoroughly!
+i.e. whether everything actually works out.
 
 
+struct Foo<T: Trait> { ... }
+want to store evidence of Trait in Foo so &Foo is a thin pointer and can use Trait
 
-
-
-
-
-
-
+struct Bytes<static N: uint> { bytes: [u8, ..N] }
+do *not* want to store evidence of N in Bytes!
+and what does &Bytes mean? does the N go next to the &?
+  yes, actually. that's what we want. Bytes = str.
+but then how to accomplish pointer to counter-next-to-array?!
+struct Bytes<static N: uint> { N, bytes: [u8, ..N] }?
+but &Bytes will still be fat...
+instead of `static`s in types, have trait Static<T> { static Val: T }??
+and struct Bytes<N: Static<uint>>?
+but then &Bytes will be wrong...
 
 
 
