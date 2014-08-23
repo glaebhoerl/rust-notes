@@ -1,85 +1,108 @@
 Deconflate types and modules
+  -> "Stop treating types as modules" ?
+  current types-as-modules conflation is self-inflicted wound
+  bottomless pit of compounding accidental complexity
 
-No types in paths
-  instead of `Vec::new()`, write `vec()` or `new_vec()`
+No types in paths!
+  *only* modules
+  instead of `Vec::new()`, write `vec()` or `Vec()` or `new_vec()`
 
 Types and modules live in separate namespaces
+  anything used before `::` is a module (`::<` is distinct)
+  anything used after `:` is a type
 
-Remove Self and self?
+Remove Self and self
   traits are now `trait Ord<T> { fn cmp(a: &T, b: &T) -> Ordering; }`
-  QUESTION should we do this? having it clear which type is Self instead of arbitrarily first/last is nice...
+  for single-parameter traits, trait objects are still &Foo
+  for MPTCs, have to make it explicit with `?`: `&Bar<?, int>` or `&Bar<int, ?>`
+     desugar to `exists T where Bar<T, int>. &T` and `exists T where Bar<int, T>. &T`
+  (SPTCs can also be written `&Foo<?>` if desired)
+  far future: 
+    for fully explicit existential quantification syntax, use `?` instead of `exists`?
+    e.g. `type ShowBox = ?T: Show. Box<T>`
+  can you also write `T: Bar<?, int>`?
+  (likewise in Trait1 + Trait2)
+  TODO does this accidentally induce type lambdas?? think it through
+  would `self` stay a keyword?
+    only other use is with `use`? but want to change that also :o)
+
+Remove anonymous impls
+  use `for<T> { }` to scope generics over multiple items, if desired, and typedefs to abbreviate types (e.g. Self)
+  e.g. `impl<T: Trait> Foo<T> { ...items... }` becomes `for<T: Trait> { type Self = Foo<T>; ...items... }`
 
 Trait type parameters always input types, output types always associated types
   already part of aturon's RFC :)
 
-Remove anonymous impls
-  use `for<T>` and typedefs instead, if desired
+Associated items (incl. methods) live in same scope as trait (module containing trait)
+  allow writing `use mod::{Trait { .. }, foo, bar}` to import all associated items together with trait (like Haskell)
+  likewise enums and variants?
+  do all methods have to be in scope to write an `impl`, or are they automatically in scope there?
 
-trait methods and associated items live in parent scope
-  do they get imported together with the trait? (what about enum variants?)
-    no, they shouldn't: they're no different from any other polymorphic `fn` (?)
-    what about in `impl`s? do all methods have to be in scope to write an `impl`?
-    allow restricted globs a la Haskell, like `use foo::Trait { .. }` to import all methods?
+`trait Foo<T> { ... }` prepends `T` to the type parameter list of each associated item
+  e.g. `trait Foo<T> { type Assoc; fn func(); static NUM: int; }`
+    => use as: `Assoc<String>`, `func::<String>()`, `NUM::<String>`
+  this is exactly the same as how `for<T> { ... }` works!
 
-`trait Foo<T> { type Assoc; fn func(); static NUM: int; }` adds T as a type parameter to each item (at beginning or end? prob beginning?)
-    Assoc<Type>, func::<Type>(), NUM::<Type>
-    works exactly the same as `for<T>`
-
-trait impls are now e.g. `impl Ord<MyType> { }` or `for<T: Ord> impl PartialOrd<T> { }` (or impl<T: Ord> PartialOrd<T>)
-    remove `impl for` syntax
-    means you can grep for `impl Trait`
-
-What about trait objects, Trait + Trait, ... ?
+trait impls are now e.g. `impl Ord<MyType> { }` and `impl<T: Ord> PartialOrd<T>`, or perhaps `for<T: Ord> impl PartialOrd<T> { }` 
+  removes `impl for` syntax
+  w/ `for<T: Ord> impl` syntax, means you can grep for `impl Trait` (also more readable, perhaps)
 
 UFCS
+  there is no such thing any longer as "a method", only functions and associated functions
 
 UMCS
-  on what basis?
-  search first in caller's scope, then in module where type was *imported from*
-  or some kind of `use mod::{Type { .. }, foo, ...}` syntax?
-  but then should we put anonymous `impl`s back again?
-  need to think about what the *primary* objectives are, and which are ancillary!
-
-Semantics of `.`
-  `.` is somewhat "magical"
-  autoref? (5.to_string() -> (&5).to_string())
-  autoderef? ((box 5).to_string() -> (*(box 5)).to_string())
-  TDNR?
-  look at Niko's name resolution prototype!!
+  can call /any/ function using `.` syntax, receiver is first argument
+  `.` is somewhat magical, unlike normal function calls
+  autoref, autoderef, TDNR, etc.
+  basically it should keep working more or less how it currently works. any changes -> separate proposal.
+  TODO look at Niko's name resolution prototype!!
+  only need to add a mechanism to avoid having to import every method separately (keep not having to)
+  we choose: search for method first in caller's scope, then in module where type of receiver was *imported from*
+    (defined as: exact monomorphic match on outermost type constructor)
+    "imported from", rather than "defined in"!
+    makes it possible for different modules to do different remixes of provided methods
+    compositionality etc.
 
 Benefits:
-  Massively simplify resolve!
+  Hopefully should massively simplify resolve (only remaining complexity for magicality of `.`)
   Obviates UFCS complexity
-  Obviates Trait::foo vs Type::foo vs <Type as Trait>::foo complexity (esp. for associated items!)
-  Name resolution comes before typechecking(?)
-  UMCS
-  Removes need for "helper traits" and extraneous default methods (simplifies e.g. Iterator)
-  Simplicity, consistency, orthogonality
-  80% of Rust code is shifted 4 lines leftwards
-  (?) `impl Trait` greppability
-  might make it easier to have modules-parameterized-over-types or types-parameterized-over-modules in the future (e.g. ML-style modules)
+  Obviates Trait::foo vs Type::foo vs <Type as Trait>::foo etc. complexity (esp. for associated items... half of RFC is just about this)
+  Obviates complexity around explicit type application for `Self` (`foo::<for String>()` ...)
+  Obviates complexity around calling methods through typedefs (`type IntVec = Vec<int>; IntVec::new()` ... now it's just `new_vec()`)
+  Name resolution comes before typechecking(?) (or maybe not, because of `.`)
+  UMCS!
+  Removes need/demand for semantically gross "helper traits" and extraneous default methods (simplifies e.g. Iterator to just `next` and `size_hint`, as it should be)
+  Method remixes
+  Simplicity, consistency, orthogonality, compositionality...
+  80% of Rust code is shifted 4 lines leftwards :)
+  potential `impl Trait` greppability
+  far future: might make it easier to have modules-parameterized-over-types or types-parameterized-over-modules (e.g. ML-style modules)?
 
-FUTURE:
-- mod<T>?
- - types and modules are distinct, but can parameterize each over the other?? (== just different kinds?)
- - mod m<type T> { static x: T } makes sense(?)
- - but struct T<mod m> { x: m::some_type } not so much? traits on mods??
-   - trait Foo<mod m> { static N: uint; fn foo(); type T; ... mod sub;??? }
-   - ok, but what about bounds and impls?
-     - mod my_mod<mod param_mod: Foo> {
-           use param_mod::N;
-       }
-     - impl Foo<foo_mod> {
-           ...
-       }
- - if we ever grow ML-style module signatures, we should find a way to make `trait`s serve dual purposes
-   - would you be required to write `impl Trait for my_mod`, or would it be implicit?
-   - (need to investigate how ML works...)
-   - (TODO look at Ericson2314's proposal!)
-   - module = input type, Self = output type?!
-   - but modules are instantiated explicitly, while trait resolution is implicit!
-   - so there may not be any input vs output type distinction for modules(?)
-     (nice duality? for types, impl explicit, resolution implicit; for modules, impl implicit, instantiation explicit)
+Drawbacks:
+  lose cute `Vec::new()` syntax
+  ...I think that's it.
 
-x
-x
+
+FAR FUTURE:
+mod<T>?
+  types and modules are distinct, but can parameterize each over the other?? (== just different kinds?)
+  mod m<type T> { static x: T } makes sense(?)
+  but struct T<mod m> { x: m::some_type } not so much? traits on mods??
+    trait Foo<mod m> { static N: uint; fn foo(); type T; ... mod sub;??? }
+    ok, but what about bounds and impls?
+      mod my_mod<mod param_mod: Foo> {
+          use param_mod::N;
+      }
+      impl Foo<foo_mod> {
+          ...
+      }
+ if we ever grow ML-style module signatures, we should find a way to make `trait`s serve dual purposes
+    usable as both type class and module signature
+    would you be required to write `impl Trait for my_mod`, or would it be implicit?
+    TODO need to learn about how ML works...
+    TODO look at Ericson2314's proposal!!
+    module = input type, Self = output type?!
+    but modules are instantiated explicitly, while trait resolution is implicit!
+    so there may not be any input vs output type distinction for modules?
+      nice duality? for types, impl explicit, resolution implicit; for modules, impl implicit, instantiation explicit?
+.

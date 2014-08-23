@@ -9,26 +9,27 @@
    TODO! consider the general case (not just closures but &mut references and existential quantification, private types, etc. in general)
    (but feels like it should be fine)
    - Haskell doesn't _have_ anything other than closures with immutable environments
-   - => therefore, even if only those are pure in Rust, then we're at least as good as Haskell
-   - GHC's IO monad is just `State# RealWorld -> (# State# RealWorld, a #)`
-     or without the noise: `World -> (World, a)`
-     State#/World must be used linearly, but GHC can't enforce it, so needs to hide it behind an `IO` monad
+   - => therefore, even if only closures with immutable environments are pure in Rust, we're at least as good as Haskell
+   - GHC's IO monad is defined as `State# RealWorld -> (# State# RealWorld, a #)`
+     or, without the noise: `World -> (World, a)`
+     State#/World must be used linearly, but GHC can't enforce it: therefore needs to hide it behind an abstract `IO` type.
    - => but Rust does have linear/affine types!
-   - Clean also has linear/affine/uniqueness types, so exposes World directly
-     `World` is linear/affine because Haskell and Clean are lazily evaluated and need to enforce an execution order for IO
-   - => but Rust is strictly evaluated, so there's no need for this! (it's free)
+   - Clean has linear/affine/uniqueness types, so it exposes World directly, with the IO wrapper only for convenience
+     World is linear/affine because Haskell and Clean are lazily evaluated, and need to enforce an execution order for IO operations
+   - => but Rust is strictly evaluated, so there's no need for this! (it comes for free)
    - in Clean and Haskell, State#/World has two purposes:
      * enforce an execution order, and
-     * make sure you can only do IO if you have the State#/World
-   - => in Rust, we only need the latter
-   - => therefore: `State`/`World`/`IO`/whatever is cloneable given unique access
-   - can think of it as `&mut RealWorld`, i.e. a mutable reference to the outside world
+     * make sure you can only do IO if you've been granted access to the State#/World
+   - => in Rust, we only need the latter!
+   - => therefore: `State`/`World`/`IO`/whatever is cloneable if you have unique access
+   - can think of it as `&mut RealWorld`, i.e. a mutable reference to The Outside World
    - normally `&mut T` is non-cloneable, to enforce unique access to the referent
-   - but having unique access to the Outside World is by definition impossible!
-   - => therefore, allowing the IO cap to be cloneable under `&mut` is OK!
+   - but having unique access to The Outside World is impossible by definition!
+   - => therefore, there's no point to forbidding it from being cloneable
  - the type system does not have to change at all
  - no effect typing, no polymorphism, just passing around IO caps in arguments
- - could do it entirely in library code, except for sugar
+ - could do it entirely in library code (calling `fn dup(&mut IO) -> IO`)
+ - only need language support to make it convenient (dup/pass it automatically)
  - all closures with mutable environments are untouched
  - all function calls are untouched
  - only "top-level" functions which actually do IO need to be changed to take an IO cap
@@ -36,14 +37,14 @@
    - how many of these are there?
  - Cell, RefCell, and other "internal mutability" things need to take IO caps for their methods
    - QUESTION! if Cell takes IO cap in constructor and stores it instead, is that bad? why?
-   - ANSWER! even if stored, couldn't use it from an & borrow!
+   - ANSWER! even if stored, couldn't use it from an & borrow! so this is not a hole
  - traits are also mostly untouched, or improved
  - e.g. Eq and Ord _shouldn't_ do IO
- - for Iterator, iterators which do IO can store the IO cap, and next() takes &mut self so they can use it
+ - for Iterator, iterators which do IO can store an IO cap, and next() takes &mut self so they can use it
  - types like Reader and Writer could either take an IO cap in their constructors and store it, or take an IO cap on each method
    - if the destructor does IO, they probably need to take it in the constructor and store it?
- - main() gets passed an IO cap
- - and of course `unsafe fn unsafe_io() -> IO` (...have `unsafe static`?)
+ - main() gets passed an IO cap at program start
+ - and of course have an `unsafe fn unsafe_io() -> IO`
  - the only hard part is figuring out sugar for implicitly passing (&mut-cloning) the IO cap, and/or whether to implement it as some kind of general mechanism
    - type-based? (declare that `struct IO` is always passed implicitly)
    - function-based? (allow declaring function args which are passed implicitly)
@@ -51,7 +52,7 @@
      - or search the calling context, pass implicitly if exactly 1 value of matching type is in scope, or if at least 1 is && type is zero-sized?
      - (like Scala implicits ... ?)
    - just hard-wire it?
-     - => probably the wisest choice for now?
+     - => probably the best choice for now?
      - still need to figure out syntax 
        - `fn print(s: &str, use IO);`
          - `fn print_with(s: &str, printer: fn(&str, use IO))`
@@ -70,32 +71,32 @@
      - `&mut` entails `let mut`, `&uniq` would be more appropriate
      - the second version also only works with `let mut` or if you make new `let`s each time...
      - but alternative is just compiler magic (which is involved anyway)
-     - so then: &Fn(int, IO)? or special syntax? what/how?
+     - so then: &Fn(int, IO)? or special syntax? what/how? probably this is fine
  - and potentially extending it to a hierarchy of caps:
    - effects observable only:
-     * within this function (trivial, default)
-     * within this task: {Ref,}Cell
-     * within this process: Arc, Atomic, spawn(), channel()
+     * within this function (trivial/free/default)
+     * within this task: {,Ref}Cell
+     * within this process: Arc, Atomic, spawn(), channel(), send() etc.
      * the whole "outside world": IO
    - allows e.g. starting tasks which cannot do external IO, only internal communication
    - would require a system for implicitly translating caps to sub-caps (explicitly would be too painful, e.g. have IO, want to use Cell)
      - impl SubCapOf<IO> for Comm?
-     - this doesn't actually seem that bad, if it works
+     - this doesn't actually seem too bad, if it works
    - how much do we want this? Haskell only has IO.
    - => it's probably simpler to just have IO.
         could the others be added backwards-compatibly?
  TODO need to work through various use cases! 
-  * debug_assert!()
-  * Lazy<T>
-  * STM
+  * debug_assert!() OK!
+  * Lazy<T> OK!
+  * STM OK!
   * rewrite rules
   * parallelization?
- to see if all of this is truly sufficient.
+ to see if all of this is truly sufficient. (seems to be!)
  "Ask not what you can do for purity, but what purity can do for you"
  QUESTION would this also help with e.g. "cleanness" of pattern matching via `Deref`*? 
    definitely for plain `Deref`, maybe less so for `DerefMut`
  Q: "But what about logging?!"
- A: "Just pass in a (reference to) the logger!" (you should do this anyways)
+ A: "Just pass in a (mut reference to the) logger!" (you should do this anyways)
  Q: "What about random number generation?"
  A: probably the same thing. boohoo.
  "purity" just devolves to not being able to access global mutable state?
@@ -113,7 +114,7 @@ pub trait Capability: sizeof(Self) = 0 {
 pub fn dup<Cap: Capability>(cap: &uniq Cap)        -> Cap;
 pub fn sub<Cap: Capability>(sup: &uniq Cap::Super) -> Cap;
 
-// actually exposed:
+// possibly exposed:
 pub fn {dup, sub} as above, except: &mut Cap, or Cap -> (Cap, Cap)
 
 LANGUAGE DEF:
@@ -121,45 +122,94 @@ Whenever
  * A function expects an argument of type `Cap` where `Cap: Capability` as its last argument, and
  * The argument is omitted by the caller, then:
  * If a value of type `Cap` is available in the caller's context, it is implicitly `dup()`ed, or
- * If a value of type `Cap::Super` is available, then it is implicitly `sub()`ed,
+ * If `Cap::Super` != `Cap` and a value of type `Cap::Super` is available, then it is implicitly `sub()`ed,
+ * (Keep doing this until `Cap::Super` = `Cap`),
  * Then the result is implicitly passed in place of the omitted argument.
+"Available in the caller's context" means:
+ * In an argument, let, or match binding
+ * Look into struct and tuple fields, but don't call `fn`s (obviously)
 
 pub unsafe fn unsafe_cap<Cap: Capability>() -> Cap;
 
-pub struct Mut  { priv marker: NonCopy }
-pub struct Comm { priv marker: NonCopy }
-pub struct IO   { priv marker: NonCopy }
+pub struct Mut  { marker: NoCopy } // affects task
+pub struct Comm { marker: NoCopy } // affects process
+pub struct IO   { marker: NoCopy } // affects world
+// TODO: bikeshed names
 
 impl Capability for Mut  { type Super = Comm; }
 impl Capability for Comm { type Super = IO;   }
 impl Capability for IO   {                    }
 
-// LANGUAGE DEF:
- * Functions which do not have unique access to any Cap must be referentially transparent.
-   TODO make this precise w.r.t &, &mut, etc.!
+LANGUAGE DEF:
+ * Functions which do not have unique access to any Cap must be pure.
+   TODO make this precise w.r.t. arguments, &, &mut, lifetimes etc.!
  * Functions which do not have unique access to a Comm may not have effects outside of the current task.
  * Functions which do not have unique access to an IO may not have effects outside of the current process.
-QUESTION: do the last two need to be in the language def, or can it be left up to `std`?
-QUESTION: should FFI (`extern` blocks) have any compiler-enforced restrictions?
+QUESTION: do the last two need to be in the language def, or should it be left up to `std`?
+QUESTION: should FFI (`extern` blocks) have any compiler-enforced restrictions (e.g. mandatory cap arguments)? (maybe lint?)
 QUESTION: do we need to do anything special w.r.t. `static mut`?
 
 fn main(IO) { ... }
 
 pub struct UnsafeCell<T> { ... }
-pub fn unsafe_get_mut<T>(cell: &UnsafeCell<T>, Mut) -> *mut T;
+pub fn get<T>(self: &UnsafeCell<T>, cap: Mut) -> *mut T;
 
 
+## Use cases
 
+### debug_assert!(...EXPR...)
+=> let expr = ref |&:| ...EXPR...; if !expr() { fail!() }
+=> env must be immutable => EXPR must be pure
+=> can't accidentally put side effecting code in debug_assert
+=> yay!
 
+### STM
+pub struct STM<'a> { marker1: NoCopy, marker2: ContravariantLifetime<'a> /* like & and &mut */ }
+impl Capability for STM { }
+// no Super!! can't do STM ops as normal IO, only in atomic transactions!
+// (iow STM is disjunct from the normal hierarchy of caps)
 
+pub struct STMCell<T> { ... }
+impl<T> Sync for STMCell<T> { }
+pub fn newSTMCell<T>(val: T) -> STMCell<T>; // pretty sure we don't need a cap here
+// and/or `pub fn allocSTMCell(self: &out STMCell<T>) -> &out T;`
+pub fn get<T: Copy>(self: &STMCell<T>, cap: STM) -> T;
+pub fn set<T: Copy>(self: &STMCell<T>, val: T, cap: STM);
+pub fn unwrap<T>(self: STMCell<T>) -> T;
+// whether/how to allow borrowing of STMCells seems like a separate question
+// but given that transactions can be restarted etc. it might not be sound?
+// (but maybe we can generalize to Clone?)
 
+thanks to lifetime elision we don't actually need to write STM<'a> anywhere :o)
 
+pub fn atomically<T>(body: &Fn(STM) -> T, cap: Comm) -> T { ... }
+`atomic! { ... }` -> `atomically(ref |&:| { ... })`
+`body` only has access to immutable environment => must be pure...
+...except passed an `STM` cap, so it can do STM ops. but not any other IO!
+`body` implicitly has a higher-rank lifetime (via elision): for<'a> &Fn(STM<'a>) -> T
+so the STM cap cannot escape (~ ST trick in Haskell)
+(this is why we need `struct STM<'a>` instead of just `struct STM`)
 
+### Lazy<T>
+(see main notes)
+need to distinguish Lazy values where the thunk may do IO and where it may not
+this probably just means requiring `Fn` and not `FnOnce` for the thunk body
+then you can safely `eval()` an `&Lazy<T>` (modulo blackholing?)
+so I think this works out too (w/ some trickiness unrelated to purity)
+(alternately can parameterize Lazy, thunk, and eval over a cap?)
 
+### Parallelization
+...what do we actually need to ensure / want to do here?
+maybe just want the same API as Niko's lightweight parallelism plans, and we just get the "parallel closures don't do IO" guarantee for free?
+TODO
 
-
-
-
+### Rewrite rules
+need to read up more on the theoretical basis for soundness of rules
+might be related to free theorems?
+suspicion: Haskell only has pure functions, closures and thunks (immutable environments)
+therefore rewrite rules should be sound for at least the subset of Rust code which only involves these things
+need to think harder once pass-by-move and &mut things get involved
+TODO
 
 
 

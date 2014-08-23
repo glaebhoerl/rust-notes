@@ -1,8 +1,18 @@
-# Existential Quantified Types (EQT)
+# Existentially Quantified Types (EQT)
 
 Derived from SST (Statically Sized Types), which has a confusing name. I like this one better.
 
+Paper: "First-class polymorphism with existential types" (Daan Leijen)
+
 # Summary
+
+TODO rewrite all this
+DST and EQT are two ways of talking about the same thing
+most things have correspondences between one and the other
+(but not exactly the same - e.g. EQT puts evidence 'outside', not 'inside' structs)
+EQT feels much more 'right'
+concerned we might be doing things under the DST framework which are problematic or have far-reaching consequences, and considered under EQT, would be much more apparently so; conversely, things which are weird/strange or flummoxing under DST would be much clearer under EQT
+(e.g. with multiply-existentially-quantified things, "unboxed unsized types", ...)
 
 The current design (DST) is based on a concept called dynamically sized types, which are sort-of-like existential types, but not quite. This proposal suggests using actual existential types instead.
 
@@ -410,8 +420,9 @@ Paper: "Quantified types for MLF"
     so would `Vec<&Copy>`, e.g.
     but should we take this into consideration?
 
-TOREAD "Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism"
+borrow Daan Leijen from MSR to work on Rust :o)
 
+TOREAD "Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism"
 
 QUESTION should `ref T` be a different *kind*?
 kind or role?? what's the difference/relationship?
@@ -420,6 +431,8 @@ is this related to GHC's #/?/?? kinds and subkinding?
 boxity polymorphism? http://www.reddit.com/r/haskell/comments/2d81tl/type_families_on_unboxed_types/cjnoamn
 (is `ref` precisely dual to GHC's new solution?)
 
+
+does `ref` on types mean anything more than "not stored unboxed in this type"?
 
 http://www.reddit.com/r/rust/comments/2c6pn0/how_does_rust_implement_calling_generic_functions/
 Allows dynamically linked polymorphic functions!
@@ -450,12 +463,24 @@ struct Bytes<static N: uint> { bytes: [u8, ..N] }
 do *not* want to store evidence of N in Bytes!
 and what does &Bytes mean? does the N go next to the &?
   yes, actually. that's what we want. Bytes = str.
-but then how to accomplish pointer to counter-next-to-array?!
+QUESTION but then how to accomplish pointer to counter-next-to-array?!
 struct Bytes<static N: uint> { N, bytes: [u8, ..N] }?
 but &Bytes will still be fat...
 instead of `static`s in types, have trait Static<T> { static Val: T }??
 and struct Bytes<N: Static<uint>>?
 but then &Bytes will be wrong...
+
+QUESTION how to model constraints on impls for traits-as-structs?
+"Or, put the other round, does Eq e entail Eq [e]? More concretely, can we construct a dictionary for Eq [e] from a dictionary for Eq e?
+Yes, we can, using the (global) instance declaration to discharge the constraint Eq [e]:
+instance Eq a => Eq [a] where ..."
+trait Eq { ... }
+impl<T: Eq> Eq<T> for Vec<T> { ... }
+struct Eq<Self> { ... }
+static<T: Eq> EQ_FOR_VEC: Eq<Vec<T>> = Eq { ... };?
+think this works out fine
+
+
 
 
 

@@ -5,7 +5,7 @@
 
 # Summary
 
-Make a distinction in the language between types which are "just data" (such as `Option`, `Ordering`, and `Point`) and types which represent abstraction boundaries (such as `Box`, `Cell`, `HashMap`, and `Vec`). The built-in traits are automatically propagated over "just data" types, and must be explicitly re-introduced at abstraction boundaries. Doing so improves abstraction, modularity, safety, and convenience, and also eliminates an egregious soundness violation in the current language.
+Make a distinction in the language between types which are "just data" (such as `Option`, `Ordering`, and `Point`) and types which represent abstraction boundaries (such as `Box`, `Cell`, `HashMap`, and `Vec`). The built-in traits are automatically propagated over "just data" types, and have to be explicitly re-introduced at abstraction boundaries. Doing so improves abstraction, modularity, safety, and convenience, and also eliminates a soundness violation in the current language.
 
 Potentially also: 
 
@@ -25,6 +25,8 @@ Rust is not the only language which has encountered this problem: recently, so h
  * Email
 
  * Email
+
+https://ghc.haskell.org/trac/ghc/ticket/8827
 
 In each case, the problem is that the language has no notion of abstraction boundaries at the semantic level, and only provides the programmer with the primitive mechanism of selectively exporting names from a module for maintaining internal invariants. However, the programmer *knows* whether she intends a type to be "just data" or to represent an abstraction boundary: she just has no good way to express this to the compiler.
 
@@ -71,16 +73,15 @@ core: different ways for declaring "just data" and abstract types
 "abstract enum"   `abstract enum`   `enum`        ??`enum class`??
 
 Variations for fixing `Vec { ..v }` problem:
-
   * `v` is considered moved from
-
   * the wildcard-fields are considered move-only(?)
-  
-  * prohibit FSU on types with Drop
-  
-  * prohibit FSU on abstract types
-  
+  * prohibit FSU on types with Drop (does this solve the problem??)
+  * prohibit FSU on abstract types / types with private fields
   * prohibit using constructors of abstract types
+question of whether `S { a: foo, b: bar, ..other }` should be interpreted as
+  * `S { a: foo, b: bar, c: other.c, d: other.d, e: other.e }` (move individual fields), or
+  * `{ let result = other; other.a = foo; other.b = bar; result }` (move whole struct), or
+  * `{ let S { c, d, e, .. } = other; S { a: foo, b: bar, c: c, d: d, e: e } }`
 
 opt-in built-in traits
 
@@ -145,6 +146,12 @@ link motivation from no-privates-in-public
 only real question is syntax
 
 `abstract trait`?? `trait class`??
+
+further motivation: also allows improvement in type inference! (closed world assumption)
+http://research.microsoft.com/en-us/um/people/simonpj/papers/oo-haskell/overloading.pdf
+also potentially overlap? would this violate coherence? according to paper: no!
+problem of single impl `impl<T: ClosedTrait> ClosedTrait for Foo<T> { }` leads to infinite improvement loop
+(solution in paper: ban closed traits as supertrait constraints. seems excessive.)
 
 
 # Drawbacks

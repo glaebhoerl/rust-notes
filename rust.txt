@@ -5,11 +5,12 @@ Turn capitalization conventions into language rules for 1.0
 Change `extern "ABI"` to `extern<ABI>` or `extern ABI`
 Use `for` to introduce universal quantification
 
-UPCOMING
+TODO
 Further privacy reform (`data struct`, `data enum`, or `class`)
 Existentially Quantified Types
 Deconflate types and modules
 Purity
+Exceptions
 Allow #attr and #attr(foo) but still require #[attr = foo]
 Inline modules use normal scoping
 
@@ -18,11 +19,9 @@ Garbage collection (trait Trace)
 &out
 &move
 
-DISCOURSE
+DISCOURSE?
 `box`
-Remove subtyping
 Deterministic name resolution
-Parametricity
 Macro reform
 Intrusive datastructures, unmovable types
 Linear types
@@ -31,11 +30,11 @@ Philosophy
 # RFCs
   # MAJOR
     * Existentially Quantified Types (IN PROGRESS)
-      * struct Foo<T: Trait>
+      * `struct Foo<T: Trait>` `&Foo` for thin pointer to structs with internal vtables
       * String literals are unboxed rvalues
-      * QUESTION: impls for existential types, specifically impl<T> Eq for &[T]
-    * Purity for (almost) free (QUESTION: sugar, automatic environment/capability passing)
-    * Deconflate types and modules, UFCS, UMCS, ... (MOSTLY FIGURED OUT)
+      * ...
+    * Purity for (almost) free (FIGURED OUT)
+    * Deconflate types and modules, UFCS, UMCS, ... (FIGURED OUT)
     * Deterministic name resolution
       * QUESTIONS: is seeing names from outer scopes still deterministic? why?
         what's the precise definition of "deterministic"?
@@ -44,13 +43,12 @@ Philosophy
     * Closure reform (SUBMITTED BY nikomatsakis)
   # BIC
     * Make inline `mod`s obey normal scoping rules
-      QUESTION what should non-inline be called? just `mod foo;`? `extern mod foo;`?
-      ANSWER perhaps always `extern mod foo;` and `mod inline_foo { ... }`, no mixing.
-      QUESTION require :: to refer to crate root in `use`? probs yes
-      or not? should crate root be the default?
-    * `data struct`, `data enum`, tighten privacy (IN PROGRESS)
-    * Remove subtyping and variances (only sublifetimes, but not sub*type*s)
-    * Automatic coercions reform
+      inline mods `mod foo { ... }`, out-of-line mods declared `extern mod foo;` (but bikeshed)
+      QUESTION require :: to refer to crate root in `use`? or should crate root be the default?
+      TODO think this through
+    * Closed structs, enums, traits (`abstract struct`, `data struct`, `class`, whatever) (IN PROGRESS)
+    ? Remove subtyping and variances (only sublifetimes, but not sub*type*s)
+    ? Automatic coercions reform
     * Linear types (QUESTION: unwinding)
     * Parametricity
       * QUESTION: how to reconcile with trait SizeOf<T> { static N: uint } forall types?
@@ -60,11 +58,10 @@ Philosophy
         or just have a `sizeof` operator which is `unsafe`?
       * QUESTION how to deal with Drop? require it explicitly?
     * Checked arithmetic (SUBMITTED)
-    * Ban private items in public signatures (ACCEPTED!)
+    * Ban private items in public signatures (ACCEPTED?)
     * Tighten shadowing rules (SUBMITTED BY Kimundi)
     * Enforce capitalization conventions (REJECTED)
-    ? *T should be non-nullable (`Option<fn()>` is *already* required in FFI!)
-    * extern "ABI" -> extern<ABI> (SUBMITTED)
+    ? *T should be non-nullable (`Option<fn()>` is *already* required in FFI! should just guarantee repr of `Option`-like types.)
     * Syntax wibbles:
         Struct { f: v } -> Struct { f = v }
         #[attr]         -> #attr (BC: allow #attr and #attr(foo), but require #[attr = foo])
@@ -72,28 +69,25 @@ Philosophy
         macro_rules!    -> macro! or define!
         name@pat        -> pat as name
         <'a> |&'a Foo|  -> for<'a> |&'a Foo|
-        extern "C"      -> extern C, extern<C>, or extern(C)
+        extern "C"      -> extern C, extern<C>, or extern(C) (SUBMITTED)
+        foo::<T>        -> foo@<T>? (remove confusion w/ module scoping)
         'a              -> introduce as `scope a` or `lifetime a`, use as just `a`?
-        Foo<T>          -> Foo(T)?
-        foo::<int>(arg) -> foo@(int)(arg)?
-        |a, b| a + b    -> a, b -> a + b?
-            is this unambiguous? not in contexts which also have commas, e.g. arrays, tuples
-            require parentheses in those cases?
-            (a, b -> b) is ambiguous
-            (a, b) -> b two arguments or single tuple argument?
-            probably this is hopeless :(
   # IMPORTANT
+    * Exception handling a la Either monad (FIGURED OUT)
     * trait Trait1 + Trait2 (PARTIALLY IMPLEMENTED)
     * trait Transmute<T> (SUBMITTED BY gereeter)
-    * GC, Trace
+    * GC, trait Trace
     * &move
     * &out (SUBMITTED BY gereeter)
-    * "Unboxed trait objects" (SUBMITTED BY aturon, POSTPONED)
+    * "Unboxed trait objects" (SUBMITTED BY aturon, POSTPONED) (might be subsumed by EQT!)
     * Type ascription
     * Associated types (SUBMITTED BY aturon)
     * Macro reform
   # MINOR
-    * UnsafeUnion<A, B> (DESCRIBED IN COMMENT)
+    * General function-like generics syntax sugar
+      type Proc(A) -> R = Box<FnOnce(A) -> R> 
+      QUESTION where to put lifetimes
+    * UnsafeUnion<A, B>
     * Incoherent empty traits?
     * Associated statics (SUBMITTED BY aturon)
     * Anonymous sum types? (int|bool|char)
@@ -109,19 +103,21 @@ Philosophy
     * Disjunctive patterns in `let`s (SUBMITTED BY _, POSTPONED)
     * Liberalized destructing struct destructuring
     * Limited type inference for `static` items
-    * #compact struct, enum
+    * #compact struct, enum (GH issue)
     * Generalized object literals (closures) for any trait, not just `Fn`* 
-      QUESTION: syntax! `object` keyword?
-          closure-like syntax (||) or impl-like (fn)?
-          let foo = object (Show + Hash) {
-              show |&self| self.foo() + "foo",
-              hash |&self| self.bar() + 42
+        QUESTION syntax! impl-like? closure-like? struct-like?
+          let num = 42;
+          let obj = object (Show + Hash) {
+              show: || num.to_str(),
+              hash: || num
           };
+          self is implicit! like fn closures
     * for<T1..TN> { ..items.. } (SUBMITTED BY _, POSTPONED)
     * Naming wibbles:
         Any    -> Dynamic
         Arc    -> AtomicRc
-        Option -> Maybe (Optional, Nullable)
+        Option -> Maybe, Optional, Nullable
+        Void   -> Never
   # FAR FUTURE
     * `static` generics parameters
     * Generic generics parameters (higher-kinded types)
@@ -137,7 +133,6 @@ Philosophy
     * Datatype-generic programming (GHC.Generics)
     * Variadic generics
     * TCE
-    * Try-catch with (task-like) isolation (QUESTION: what to throw, how to catch?)
     * Delayed initialization of struct fields? (loop tying)
 
 ## QUESTIONS
@@ -145,9 +140,9 @@ Philosophy
  * What's the conflict between modules and macros?
  * What are the problems with globs?
  * Why isn't a simple newtype-based design sufficient for HashMap?
- * What is the meaning of lifetimes as traits? (`trait Outlives<'a>`?)
  * Is `Arrow` connected to linear logic/types? (To closed (symmetric) monoidal categories?)
  * Is there a description/paper about UHC's implementation of existential types?
+ * How can safety of (multiply-)intrusive data structures be proved in general?
 
 ## How `box` should work
 
@@ -284,22 +279,28 @@ connection to Drop??
 
 ## LINKS
 
-GNTD is still not Safe
+GNTD is still not Safe / Inferring Safe is wrong
 https://ghc.haskell.org/trac/ghc/ticket/8745
+https://ghc.haskell.org/trac/ghc/ticket/8827
 
-FlexibleInstances can be used to violate coherence
+FlexibleInstances can be used to violate coherence!!
 http://www.reddit.com/r/haskell/comments/2agy14/type_classes_confluence_coherence_global/civ6y1g
+TODO port test case to Rust
 
 BitC Lessons For Other Language Developers - Simple vs. Too Simple
 http://www.coyotos.org/pipermail/bitc-dev/2012-May/003469.html
+
+Macro import/export
+https://github.com/mozilla/rust/issues/3114
 
 Meeting discussion about macros
 https://github.com/rust-lang/meeting-minutes/blob/master/Meeting-other-2014-07-16.md
 
 Dependent types!! (pigworker)
 http://stackoverflow.com/a/13241158
-need some form of evidence-carrying to obtain information from pattern matches...
-Combine with `static fn` to get *really* dependent??
+
+Full dependent types in Haskell (w/ singletons)
+http://lpaste.net/109388
 
 Niko Matsakis's name resolution plan + prototype
 https://github.com/nikomatsakis/rust-name-resolution-algorithm
@@ -309,7 +310,32 @@ http://www.rntz.net/post/intuitive-hygienic-macros.html
 
 GHC kind inference
 https://ghc.haskell.org/trac/ghc/ticket/9200
- 
+
+Ways to implement polymorphism
+http://www.eecs.harvard.edu/~greg/cs256sp2005/lec15.txt
+
+Ericson2314's modules/traits proposal
+https://github.com/Ericson2314/rfcs/blob/master/active/0000-combine-mod-trait.md
+
+TCE
+https://mail.mozilla.org/pipermail/rust-dev/2011-August/000711.html
+https://mail.mozilla.org/pipermail/rust-dev/2011-August/000700.html
+https://mail.mozilla.org/pipermail/rust-dev/2013-April/003557.html
+https://github.com/mozilla/rust/issues/217
+
+Variadic generics / arity polymorphism
+http://www.ccs.neu.edu/racket/pubs/NU-CCIS-08-03.pdf
+http://www.ccs.neu.edu/racket/pubs/esop09-sthf.pdf
+http://www.ccs.neu.edu/racket/pubs/NU-CCIS-08-01.pdf
+http://www.ccs.neu.edu/racket/pubs/dissertation-tobin-hochstadt.pdf
+
+Existential types
+TODO
+
+Higher-rank types
+TODO
+
+
 ## INTRUSIVE DATA STRUCTURES
 requires non-moveable types!! ?
 what would the ExplicitMove trait look like?
@@ -336,23 +362,100 @@ generic functions?? :(
   allow instantiating only `ref T`?
   not quite, because `ref T` can still use &move :(
 
+
 ## &out, &move
  use cases:
-  explicit lifetimes
+  explicit lifetimes (tying together)
   trait objects
   slices
   uniform representation
   flexible timing of returns / moves
 
-## Try-catch (exception handling)
- - task-like isolation to ensure exception safety
- - only difference w.r.t. returning `Result<T, Error>` is:
-   * representation (unwinding)
-   * ergonomics
- - always throw a single type, present in the signature? (like M#?)
- - requires explicit `throws Result<A, B>` to propagate both A and B... good or bad thing?
- - can do something clever with existentials and/or Dynamic? (like GHC?)
- - overall, is this worthwhile over just using Result?
+
+## Exceptions
+Parts:
+ * union types / restricted Any
+ * match-on-type
+ * `throws Type`, `throw val`
+ * `try!`
+
+Union types:
+  Either<A, B, C, D>
+  Can be any of A, B, C, or D
+  Like `Any`, but restricted to a set of listed types
+  Represented as (TypeId, UnsafeUnion<...>) (~ enums)
+  Either<Types..., T> = Either<Types...> if contains(Types, T)
+  T is *implicitly* coerced to Either<..., T, ...>
+  can test contained type like with `Any`, or use type-match
+  QUESTION what if Types contains trait objects?
+    avoid trait object auto-coercing in this case?
+  QUESTION what if Types contains a type variable?
+    does this work out OK? forbid it?
+  QUESTION what if Types contains another `Either`?
+    would naively lead to nested TypeIds
+    do that? flatten it? forbid it?
+    should be able to go from A to Either<A, B, C> *and* from Either<A, B> to Either<A, B, C>...
+  QUESTION is this related to OCaml's polymorphic variants?
+  (desired renames: Any -> Dynamic, Either -> Any)
+  special syntax: (A|B|C), A || B || C, A or B or C, ... ?
+    (A|B|C) with `foo is Type` for matching works out OK (no conflict with disjunction patterns)
+
+Type match:
+  foo: (int|bool|char)
+  match foo {
+      i is int => ...
+      b is bool => ...
+      c is char => ...
+  }
+  or `i: int =>` (conflict: type ascription), or `i as int =>` (conflict: planned name binding), or `(type int, i) =>` (ok but ugly)
+  because set of types is fixed, can check exhaustiveness
+  (perhaps also allow this for "unrestricted" Any and require a wildcard?)
+
+Throwing:
+  fn foo(Bar) -> Baz throws bool { ... }
+  `throw false` has type `!`, argument type checked against `throws` clause
+    or throw!(), like fail!()? eh, nicer if first-class
+  as with return type, so e.g. `fn foo() throws Box<Any> { throw box 666; }` works
+  algebraically isomorphic to returning `Result`, but exception is propagated by default (e.g. by unwinding)
+    functions without a `throws` clause, i.e. which don't throw, "throw" `!`, just like functions which don't return "return" `!`
+  basically this is making the Either monad a first-class part of the language, just like we've already done with ST and IO
+    this feels good!
+  contract violations are *not* part of `throws` clause and not catchable!!
+    assert/unwrap, array out-of-bounds, RefCell borrow check failure, ...
+  having to add `throws` to type of `fn` pointers, and additional typaram to `Fn` traits, e.g. `trait Fn<Args, Ret, Err>`
+    in surface syntax sugar, Ret defaults to `()` if `->` omitted, and Err to `!` if `throws` omitted
+    this seems reasonable and well-contained
+
+Catching:
+  `fn try<T, E, Body: (|| -> T throws E) + Send>(body: Body) -> Result<T, E>`
+  task-like isolation, exception safety
+  `try! { ... }` => `try(|| { ... })`
+  also inverse: `fn throw_err<T, E, Body: || -> Result<T, E>>(body: Body) -> T throws E`
+  `try` and `throw_err` witness the isomorphism between `-> A throws B` and `-> Result<A, B>`
+  choose one or the other based on ergonomics
+
+Put it all together:
+  fn some_op(arg: int) -> String throws (IoError|NetworkError) { ... }
+  fn other_op(arg: int) throws IoError {
+      let res = try! { some_op(arg) };
+      match res {
+          Ok(s) => println!("ok: {}", s),
+          Err(ne is NetworkError) => println!("net err: {}", ne),
+          Err(ie is IoError) => throw ie
+      }
+      // some_op(arg); error: can't throw NetworkError
+      // throw 9i; error: can't throw int
+  }
+  have to list throwable type(s) explicitly, type error if you try to throw something not listed, but propagation is implicit
+  could possibly work on syntax more (`match try! { ... } { ... }` looks weird), but this is quite tolerable
+  (unhandled errors are rethrown explicitly... not sure if this is a problem)
+  various parts are orthogonal:
+    can do `throws`, `throw`, and `try` without union types and type-match to get just the automatic propagation
+    can do just `(A|B|...)` / Either<A, B, ...> and type-match and use it with `-> Result<Foo, (A|B|C)>` for just the automatic coercion
+    but probably need both to make it really seamless
+      e.g. if have just throwing, need to use enums in return type and catch-and-rethrow to embed, or trait objects (`Box<Any>`) which allocate
+      if just union types, need to return `Ok()` and use (current incarnation of) `try!` everywhere
+
 
 ## QUESTIONS
 - "optimize out" references to zero-sized structs?
@@ -361,7 +464,7 @@ generic functions?? :(
   - ditto for references to uninhabited types?
   - therefore they can just be treated as `undef`
   - moved to the end of function argument lists and not actually passed in
-  - moved to the end of structs and not considered for `sizeof`
+  - moved to the end of structs and not considered for `sizeof`?
   - is there anywhere this evilness is observable?
     - would anyone care if sizeof((A, B)) >= sizeof(A) + sizeof(B) breaks?
     - what about `ptr_eq`?
@@ -370,27 +473,9 @@ generic functions?? :(
         - would they ever use `&mut Thing` or `&Thing`, or just `*Thing`?
         - probably would... ?
       - perhaps only do this for _either_ zero-sized or uninhabited references, but not both?
-      - or more like: only for `data struct`s! (and `data enum`s?)
+      - &Void and &mut Void are inherently unsound!
+      - or more like: only for `data struct`s? (and `data enum`s?)
       - then I think we only have the `ptr_eq` problem
-- submodules inherit imports if they're in-file, but not if they're in a separate file?
-  - have inheriting and non-inheriting modules, and separate-file modules are always the latter?
-- how can safety of (multiply-)intrusive data structures be shown?
-- relationship of traits/trait-objects/DST/existentials to subtyping?
-  - !SubS: SuperS ??
-  - &SubS: &SuperS
-  - SubT: SuperT (?)
-  - !&SubT: &SuperT
-  - S: T (?)
-  - !&S: &T ?
-  ----
-  - foo(&T) == foo<'s>(&'s T) ?= foo<'s: 'fn>(&'s T) ?= foo(exists 's: 'fn. &'s T)
-  - foo(&Trait) == foo<T: Trait>(&T)
-  - foo(Trait) == foo<T: Trait>(T)
-  - foo(~[&T]) == foo<'s>(~[&'s T]) ?= foo<'s: 'fn>(~[exists 't: 's. &'t T]) ?= foo(~[exists 's: 'fn. &'s T])
-  - foo(~[&Trait]) != foo<T: Trait>(~[&T]), == foo(~[exists T: Trait. &T])
-  - foo(~[Trait]) == foo<T: Trait>(~[T]), != foo(~[exists T: Trait. T])
-  -----
-  existential is subtype of concrete type, conrete type is subtype of universal?
 - can stack maps / stack tracing also be used for relocatable stacks? (why not?)
     have a map of all non-heap refs/pointers on the stack
     what about *T?!
@@ -398,125 +483,15 @@ generic functions?? :(
 - what should a not-fully-general Drop or Trace impl mean?
     A: not-covered types should have glue as normal, just not the impl
     B: a not-covered type is illegal
-    given A, B can be expressed with a smart constructor
+    given A, then B can be expressed with a smart constructor
       also allow trait bounds on struct typarams?
       only covers the case where Drop is restricted to a trait, not to a type (requires an (~) constraint)
       think this should be a separate feature
-- what could/would/should struct Foo<T: Trait> mean?
-  it should mean a vtable for `impl Trait for T` is included in `Foo`
-  therefore thin pointers to `Foo<_>` can use methods of `Trait`
-  however, `Foo: !HasPrefix<T>`
-- fn malloc<'s, T>(hm: &mut 's ???) -> &out 's T?
-    should result in something that has to be initialized in 's, but is available after
-    is this just fn malloc<'s, T>(p: &out 's *T) -> &out 's T? probably yes
-    trait Box<T> {
-        fn alloc<'s>(&out 's self) -> &out 's T;
-    }
-    self: &out or &mut? ptrs want one, Vec wants the other?! (trait Box + trait Allocator?)
-    let foo: MyBox<T>; *alloc(&out foo) = $expr;
-    let foo: MyBox<T>; *foo.alloc() = $expr;
-    -> let foo: MyBox<T> = box $expr;?!
-    box $expr => {
-        let _box: MyBox<T>;
-        *_box.alloc() = $expr;
-        _box
-    }
-    #inline(always)
-    fn make_box<T, MyBox: Box<T>, Expr: FnOnce() -> T>(init_expr: Expr) -> MyBox {
-        let the_box: MyBox;
-        *the_box.alloc() = init_expr();
-        the_box
-    }
-    box $expr => make_box(|| $expr)
-    &out Box<T>? :)
-    fn init(&out self); -> foo.alloc().init();
-    fn new<T: Init, MyBox: Box<T>>() -> MyBox {
-        let the_box: MyBox;
-        the_box.alloc().init();
-        the_box
-    }
-    fn new<T: Init>() -> T {
-        let x: T;
-        x.init();
-        x
-    }
-    have `fn(A, B) -> C` be sugar for `fn(A, B, &out C)`??
-    what about alloca?
-    alloca is useful with a dynamic size: would that be possible?
-    fn alloca<'s, T>(p: &out 's &'s T) -> &out 's T?!
-    seems questionable...
-- how to permit moving out of smart pointers?!
-    let a = My<My<int>>;
-    let b = &move *a;
-- what about `let gc: Gc<int>; out = gc.alloc(); drop(out)`??
-- what about `let vec: Vec<int>; out = vec.emplace_back(); drop(out)`??
-  these are exactly symmetrical!! allocate then initialize, vs. deinitialize then deallocate
-  use an intermediate RAII object to ensure safety?
-    for Vec? smart pointers? both?
-    almost definitely need some runtime support for Vec, bc. number of elements dynamic
-      actually, only 0 or 1 unitialized element at a time! only location varies
-    static might be possible for things with fixed shape, e.g. smart pointers
-    but how exactly? (reverse of the Box trait somehow.... ?)
-      fn alloc<'s>(&out  's self) -> &out  's T;
-      fn alloc<'s>(&move 's T)    -> &move 's Self;
-      fn dealloc<'s>(&move 's self) -> &move 's T;
-      fn dealloc<'s>(&out  's T)    -> &out  's Self;
-      struct Direct<T> { contents: T }; struct Indirect<T>{ contents: *T };
-      Direct: initialize inside out, deinitialize outside in
-      Indirect: initialize outside in, deinitialize inside out
-     -fn   alloc(&out  's Direct<T>)   -> &out  's T;
-     +fn   alloc(&out  's Indirect<T>) -> &out  's T;
-    ?+fn   alloc(&mut  's T)           -> &mut  's Direct<T>;
-     -fn   alloc(&mut  's T)           -> &mut  's Indirect<T>;
-     +fn dealloc(&move 's Direct<T>)   -> &move 's T;
-     -fn dealloc(&move 's Indirect<T>) -> &move 's T;
-    ?-fn dealloc(&out  's T)           -> &out  's Direct<T>;
-    ?+fn dealloc(&out  's T)           -> &out  's Indirect<T>;
-    how express that it points to the contents?!
-    ?+fn   alloc(|&out  's T|)         -> &mut  's Direct<T>;
-    ?-fn   alloc(|&out  's T|)         -> &mut  's Indirect<T>;
-    ?-fn dealloc(|&move 's T|)         -> &out  's Direct<T>;
-    ?+fn dealloc(|&move 's T|)         -> &out  's Indirect<T>;
-    what smart pointers are there and what operations?
-      My<T>
-      Rc<T> / Arc<T>
-      Gc<T>
-      Ref<T>
-      Vec<T>
-      ArenaPtr<T>
-    when initializing and deinitializing, always unaliased (ref-count 1)
-    every smart pointers wants Alloc (not yet initialized), but not all want move-out (deinitialized)
-    but Dealloc is tied to move-out??
-    currently constructor does alloc + init, destructor does deinit + dealloc
-    want to split these up
-    constructor is called by user; alloc and init would be called by user. this is OK
-    destructor is called by compiler
-    deinit/dealloc would be called by compiler? relationship to existing Drop?!
-    test subject is Rc
-  creating &out implies deinitialization!!
-  &move: evidence that you have initialized the thing, and obligation to deinitialize
-  &out:  evidence that you have deinitialized the thing, and obligation to initialize
-  &, &mut: evidence that you have initialized the thing, *permission* to use it
-- how to express "I have deinitialized the thing, but do not want to initialize it, nor ever use it again?"
-  &dead?
-  do we want/need to?
-  `let x = ...; let y = &move x; x = *y;` seems like it should be OK? saying "actually, don't destroy it after all"
+- is there any way to give a safe type signature to `alloca`, with e.g. &out?
+- `let x = ...; let y = &move x; x = *y;` seems like it should be OK? saying "actually, don't destroy it after all"
     can this be shown safe in general?
   is there an analogue for `&out`?
   `let x; let y = &out x; ???`?
-- what about `let gc: Gc<int>; out = gc.alloc(); fail!()`? -> terminate
-- what about `let vec: Vec<int>; out = vec.emplace_back(); fail!()`? -> terminate
-- does it even make any sense to pass &out to a generic fn? is there any possibility of it being able to do the initialization?
-  every type param on a generic fn has an implicit Drop bound
-  &out does not impl Drop
-  any struct it is stored in also does not impl Drop?
-  therefore &out is always statically checked, and can't be passed to generic fns
-  also, it can't be stored in trait objects
-    because trait object constructors _are_ generic fns!
-    does this generalize to lifetimes?
-  what about &&out, &mut &out etc.?
-  (allow T: NoDrop bound?)
-  if something fail!()s while &out is live, it also fail!()s => process abort
 - how to relate `trait Foo<T>` + `impl<T> Foo<T> for My<T>` and `trait Foo for type<type> Self` + `impl Foo for My`?
     trait GBox for type<type> Self where for<T> Box<Self<T>> ???
     class forall a. Box (b a) => GBox b
@@ -555,15 +530,6 @@ generic functions?? :(
       http://perldoc.perl.org/functions/goto.html
     interacts how with explicit/implicit return?
     `return` is always tail unless followed by drops?
-- how to handle the interface between implicit-World-passing and explicit-World-passing functions?
-- how to do associated types?
-  don't like the GHC way where type functions can get stuck
-  tie them strictly to traits and "store" equality evidence in dictionary?
-    but traits are constraints on the expr level
-    this would need to be a kind-level thing??
-  bare type is like Void?
-    would this cause problems?
-    and/or existential-like? not equal to any type?
 - how to do variadic generics?
   C++ solution is too "big" and complex
   primary use case: abstracting over # of fn parameters
@@ -592,112 +558,16 @@ generic functions?? :(
   HML < HMF < MLF
   others: ??
   "It's very easy to extend the system with annotations for polymorphic applications. However, this makes it more complicated to explain which program transformations preserve typability. Basically, you get to pick any two of: (a) impredicativity, (b) preservation of typability under eta, and (c) the usual type language of System F. We chose (b) and (c) in this paper, MLF picks (a) and (b), and HMF/FPH pick (a) and (c)."
-- what is the relationship of default/`ref` roles on type parameters in Rust to phantom/default (representational)/nominal roles in GHC?
-  is it a hierarchy, phantom > boxed/representation/ref (GHC default) > unboxed (Rust default) > nominal?
-  can a nominal role be `ref`?
-  all of these mean "what are you allowed to do with this type parameter"
-  does GHC have roles on functions?
-- what is the relationship between roles and variance? are they the "same thing" in any sense?
-  both are attributes that are per-type-parameter
-  both are only used by Coercible!
-  is there a difference between phantom and bivariant?
-    bivariant: can coerce up and down
-    phantom: can also coerce sideways
-    but these are the same! coerce up to () and then down to anything else!
-  nominal == invariant?!
-    or nominal is stricter than invariant?
-    and representational == invariant?
-    things that are invariant:
-      Cell, RefCell
-      fn(T) -> T
-    for invariant things, you can still coerce newtypes
-    for nominal, you can't coerce anything
-    so invariant ~ representational
-    invariant means: T: Coercible<U> and U: Coercible<T> must both hold
-  so if T is:
-    free          => no conditions
-    covariant     => T: Coercible<U>
-    contravariant => U: Coercible<T>
-    invariant     => T: Coercible<U> && U: Coercible<T>
-    fixed         => !
-  what about `ref` roles? part of this hierarchy or orthogonal?
-    free: always ref
-    fixed: never ref
-    co, contra, invariant: ?
-  `class (Contravariant p, Functor p) => Phantom p`
-- If we lift the coherence requirements on empty traits
-    - does Coercible give us a way to do datatype-generic programming?
-    - can we implement the built-in traits as libraries?
-  For instance `Share`:
-    impl Share for int
-    impl<T: Share> Share for &T
-    impl<T: Share> Share for Atomic<T>
-    impl<T: Share, U: Share> Share for (T, U)
-    impl<T: Share, U: Coercible<T>> Share for U
-    is this decidable??
-    how does this relate to user-declared but compiler-checked impls for abstract structs?
-  GeneralizedGeneralizedNewtypeDeriving?
-    not just for newtypes, but any two Coercible types?
+- GeneralizedGeneralizedNewtypeDeriving? not just for newtypes, but any two Coercible types?
     impl the trait for tuples + anonymous sums -> newtype-derive it for representationally compatible types
-  doesn't work where the names of types, fields, and variants are relevant
-- are enums just existentially quantified somethings?
-
-## Deterministic name resolution
-- method resolution + impls
-  * operator ->
-  * postfix *
-    - is this ambiguous with multiplication?!
-    - foo*; okay: deref
-    - foo*.bar; okay: deref + field access
-    - foo*[i]; uh oh: foo `times` array?
-    - foo*(i); uh oh: foo `times` i;
-    - foo*bar; okay: mul
-    - a different symbol? @, #, ... ?
-    - but then &, &mut should become postfix too :(
-  * "impl reform"
-  - one upstream removing named Foo and other adding Foo is OK because they are imported explicitly (but this breaks with globs!)
-  - but this is not the case for impls
-  - therefore resolution must not take trait impls into account in any way
-  - i.o.w. resolution may only disambiguate based on things which are imported by name?
-- statics in patterns vs. binding as name
-  - just remove feature
-- enum variants vs. name binding
-  - this is harder
-- imports in general
-  - two imports of same name+namespace should be ambiguous #7663
-  - warning if glob import shadows name from outer scope
-
-
-## WISHLIST
- * &move, &out
-   QUESTION what can you do with &mut &move T?
- * delayed initialization of struct fields (loop tying)
- * a fast try(), or M#-style try-catch with Send body
- * BIC! unified function decl syntax, remove `impl`, `&self`
- * TCE
-https://mail.mozilla.org/pipermail/rust-dev/2011-August/000711.html
-https://mail.mozilla.org/pipermail/rust-dev/2011-August/000700.html
-https://mail.mozilla.org/pipermail/rust-dev/2013-April/003557.html
-https://github.com/mozilla/rust/issues/217
- * HKT
- * trait kinds
- * static kinds
- * type currying
- * higher-rank types
- * kind polymorphism
- * Existential Types
-
-## misc stuff
- - lifetime -> scope
-   http://www.reddit.com/r/rust/comments/1s9y7o/less_is_more_lambda_the_ultimate/cdwa0mg
- - type/decl-based search (hoogle-like)
- - more experimentation with feature gates
- - rust-doc: expand unexported type synonyms in public signatures
- - defer_type_errors
- - attributes to specify type class laws
+  (doesn't work where the names of types, fields, and variants are relevant)
+- are enums just existentially quantified somethings? (yes)
 
 
 ## misc features
+ - short-circuiting ptr-equality comparison for `impl Eq for &`?
+   needs some kind of magic because of PartialEq, e.g. &NaN != &NaN even if address-equal
+ - attributes to specify type class laws.. or first-class language feature? (not just for type classes)
  - Allow inferred type-wildcards in `impl` method signatures?
  - `fn swap<T>(self: &Cell<T>, other: &mut T)`? (no `Copy`!)
  - `EXPR is PAT: bool` operator
@@ -705,15 +575,8 @@ https://github.com/mozilla/rust/issues/217
  - refutable patterns in for loops
  - destructuring in assignments
  - array splicing [1, 2, ..arr] [..[1, 2, 3], 4, 5, ..[6, 7], 8, 9, ..[10]]
- - single-arm match (like Swift)
-   if let Some(a) = my_val {
-   } else {
-   }
-   also allow plain `let foo = bar() { }`? is it unambiguous?
- - early return from any block (return 's val? break 's val?)
-   default is innermost loop. is that intuitive?
- - whether a type is abstract should be determined at the point of declaration
-   it should not be possible to independently re-export a type and its fields/variants
+ - early return from any block: return 's val? break 's val?
+   (default for `break` is innermost loop. is that intuitive? for `return` is outermost block.. `'fn`)
  - compacted enum? no interior pointers => stronger optimization
    also compacted struct!
    no interior pointers? or:
@@ -726,9 +589,7 @@ https://github.com/mozilla/rust/issues/217
        sizeof!(Flags) == 1
    could also take advantage of tag bits in pointers, i31, ... go crazy
  - allow type inference of locally declared fns and statics?
- - automatic Functor, Bifunctor, Profunctor, .. ?
- - limited trait-based return type inference (-> Iterator<T>)
-   - ditto for args?
+ - deriving Functor, Bifunctor, Profunctor, .. ?
  - all built-in types just sugar
    - lang items?
    - & => Ref, Borrowed, ..
@@ -744,27 +605,14 @@ https://github.com/mozilla/rust/issues/217
  - let .. else ..
    - also important to enable let [mut ref a, ..] = ...
  - ! as first class type (! is just forall a. a!)
- - access tuple and tuple struct fields as .0, .1, .. (like Swift?)
-   also allow this at the type level?!
  - allow disjunctive patterns in lets?
- - associated statics
  - anonymous sum types
  - DefaultSignatures
  - unsafe traits and and unsafe impls? (can break variant that isn't directly unsafe, but other thing relies on it for safety)
  https://github.com/mozilla/rust/issues/8409
  - BIC? modular 'unsafe'? unsafe(memory), unsafe(array), unsafe(overflow), unsafe(rc_cycles), unsafe(concurrency)
    - would require mapping the dependencies
- - type equality = A: B, B: A?
  - unsafe overlapping/incoherent impls, assumed confluent?
- - mod<T>?
-   - types and modules are distinct, but can parameterize each over the other?? (== just different kinds?)
-   - mod m<type T> { static x: T } makes sense
-   - but struct T<mod m> { x: m::some_type } not so much? traits on mods??
-     - well... trait Foo { static A, fn foo(), type T } maybe it could work?!
-     - can the same trait make sense on both a module and a type?
-     - modules don't have Self! (mod m { struct Self { .. } }?)
-       - after divorce, neither do traits
-     - trait A for mod Self { mod sub: B }?
 
 ## Lazy<T>
 - for any given function with a parameter Rust wants a version where it's a value, and one where it's a closure
@@ -864,46 +712,9 @@ QUESTION how can we `eval()` from multiple threads?
   likewise Share, Send, etc.
   UnsafeUnion<_, _> is idempotent, commutative, associative
   so we can just define UnsafeUnion3<A, B, C> = UnsafeUnion<A, UnsafeUnion<B, C>>
-    this is where constructor = transmute, instead of specialized fn, would be important
+    this is where constructor = transmute, instead of plain fn, would be important
   with type macros perhaps UnsafeUnion!(A, B, C, D)
 
-
-## renames: LIB-BIC!
- - Option -> enum Maybe|Optional|Nullable<T> { Val(T), Nil|Null|Empty }
-   - enum Option<T> { Some(T), None }
-   - enum Maybe<T> { Val(T), Empty }
-   - enum Optional<T> { Val(T), Empty }
-   - enum Nullable<T> { Val(T), Null }
- - Void -> Never
- - Arc -> AtomicRc
- - Cell, RefCell -> ?, Mut, Mutable
- - push/pop -> append/remove_last()?
- - trait -> iface?
-
-## C#-like syntax:
- - &       -> ref
- - &mut    -> mut
- - ..      -> out
- - ..      -> my/take/move/..
- - ~       -> my/box/..
- - @       -> box/gc/shared/..
- - ref     -> *
- - ref mut -> ??
- - special syntax support? struct shared T { .. } how at value level? trait-based?
- - pattern matching: match shared T as shared self { { ptr } } ??
-   - will the same thing allow auto-deref / borrow checker knowledge?
-   - how to know whether mut / immut / aliasable / not?
- - what about lifetimes?
- - w/ marker types, could some of the built-in pointers be impld as libraries even at the syntax level?
-   - ~, &, &mut?
- - nullable: fn foo(ref? int); fn foo(ref int?) fn foo(Foo<Bar<int?>>) fn foo(Foo<Bar<int>?>) fn foo(Foo<Bar<int>>?)
- - arrays: box [int], ref [box str] ...
- - closure trait: ref fn(a) -> b, mut fn mut(a) -> b, move fn once(a) -> b
- - http://xkcd.com/1306/
- - http://www.reddit.com/r/rust/comments/1st5on/what_happens_if_i_dont_use/
-
-overarching goal: things should be (accurately) self descriptive!! less jargon, less abbreviations, less arcane
-verbosity proportional to obscurity / inversely to ubiquity
 
 ## TYING THE KNOT
 
@@ -923,70 +734,9 @@ use Box<Lazy<T>>? (Rc/Gc+RefCell?)
 
 use a type-based HKT approach? 
 instead of `Gc`, parameterize it, is one opaque type while constructing/tying, becomes Gc once knot is tied
-(Cell<Option<Gc<T>>>?)
-
-## GHC extensions
-
-Have:
-MultiParamTypeClasses-ish
-FunctionalDependencies-ish
-
-Want:
-HigherKinds
-RankNTypes
-ExistentialQuantification
-TypeFamilies?
-DefaultSignatures?
-PolyKinds
-GeneralizedNewtypeDeriving
-ConstraintKinds
-
-Maybe:
-DataKinds-ish
-ImpredicativeTypes
-TypedHoles
-UndecidableInstances
-
-Unlikely:
-OverlappingInstances
-
-Do not want;
-GADTs
-Arrows
 
 
-## Speed vs. C++
-
-faster|slower always|until|after
-
-# ways faster than C++:
-- aliasing, mutability invariants
-- safe borrowed pointers
-- stack closures point directly into stack?
-- moves by default, copies explicit
-- code as if single-threaded
--- Rc without atomic ops
-- less null checking
-? code without exception safety
-- FUTURE flexible struct member
-- FUTURE moves statically, not dynamically tracked
-- FUTURE fewer indirections, copies because of DST
-- FUTURE Gc available, (semi-)precise
-
-# ways slower:
-- array bounds checking
-- FUTURE MAYBE overflow checking
-- Cell<T>, RefCell<T>
-- using array indexes instead of pointers
-- YET no unboxed closures
-- YET no subtyping
-- no constexpr
-- try() slower than try-catch
-
-
-
-https://github.com/mozilla/rust/issues/3114 Macro import/export
-https://github.com/mozilla/rust/issues/8277 Anonymous sum types
+## Trait names
 
 // Semigroup
 trait Combine<T> {
@@ -1053,6 +803,11 @@ trait ComposeWithIdentity<Cat: Compose> { // ??
 
 // Profunctor?? Bifunctor? InvFunctor?
 
+// use "transform" for something?
+
+
+## Mass borrowing with Transmute
+
 //impl<'s, T> Transmute<&'s R<&'s T>> for &'s R<Box<T>> { }
 //impl<'s, T, type<covariant type> R> Transmute<&'s mut R<&'s mut T>> for &'s mut R<Box<T>> { }
 //impl<'s, 't, T, type<covariant type> R> Transmute<&'s R<&'t T>> for &'s R<&'t mut T> { }
@@ -1070,6 +825,9 @@ impl Transmute<SkolemA> for SkolemB { }
 impl<'s, T, type<type> R>
     where R<SkolemB>: Transmute<R<SkolemA>>
     Transmute<&'s R<&'s T>> for &'s R<Box<T>> { }
+
+
+## Misc 
 
 Interesting project: once Rust has `Trace` GC, implement a Haskell compiler/runtime piggybacking off of it?
   Desugar Haskell to Rust?
@@ -1094,13 +852,134 @@ vReplicate (S n) x = VCons x (vReplicate n x)
 vReplicate :: forall (n :: Nat). x -> Vec n x
 vReplicate = case (reflect @ n) of
     Z x => VNil
-    
 
 reflect :: forall (n :: Nat). Nat
 
-lens lib -> opticks, CT lib -> abstract_nonsense
+lens lib -> opticks, CT lib -> abstract-nonsense
 
 groupoid      <-> equivalence relation
 idempotence   <-> reflexivity
 commutativity <-> symmetry
 associativity <-> transitivity
+what's the precise relationship here
+
+
+## No privates in public
+
+OK:
+
+mod m {
+    pub struct S;
+}
+pub use m::S;
+pub fn f() -> S;
+
+
+Not OK:
+
+mod m {
+    pub struct S;
+}
+pub fn f() -> m::S;
+
+
+struct S; 
+mod m { 
+    pub fn f() -> S; 
+} 
+pub use f = m::f;`
+
+
+struct S; 
+pub mod m { 
+    pub fn f() -> S; 
+} 
+
+
+
+
+## Things I wrote
+TODO sort
+
+`static fn`
+http://www.reddit.com/r/rust/comments/2e76zs/rust_as_a_host_for_multilevel_languages_using/cjxdrd5
+
+Linear types
+http://www.reddit.com/r/rust/comments/2b02mb/rust_will_be_the_language_of_the_future/cj1sbcq
+http://www.reddit.com/r/rust/comments/2b02mb/rust_will_be_the_language_of_the_future/cj8n5zf
+
+Abstract over `&` and `&mut` via a built-in higher-kinded `Reference` trait
+http://www.reddit.com/r/rust/comments/2a721y/a_safe_way_to_reuse_the_same_code_for_immutable/cj8pebl
+
+Zero-sized tokens as evidence
+http://www.reddit.com/r/rust/comments/1wvxcn/lazily_initialized_statics/cf61im5
+
+Scoped attributes for checked arithmetic
+https://github.com/rust-lang/rfcs/pull/146
+
+Change `extern "ABI"` syntax
+https://github.com/rust-lang/rfcs/pull/156
+
+`abstract struct`, `abstract enum`
+https://github.com/rust-lang/rfcs/pull/10
+
+No privates in public
+https://github.com/rust-lang/rfcs/pull/136
+
+Enforce capitalization rules
+https://github.com/rust-lang/rfcs/pull/154
+
+`for` = forall
+https://github.com/rust-lang/rfcs/pull/157
+
+`Transmute` née `Coercible`
+https://github.com/rust-lang/rust/issues/9912#issuecomment-36073562
+https://github.com/rust-lang/rfcs/pull/91
+https://github.com/rust-lang/rfcs/pull/91#discussion_r13057612
+https://github.com/rust-lang/rfcs/pull/91#issuecomment-46834744
+https://github.com/rust-lang/rfcs/pull/91#issuecomment-50234451
+
+`MaybeOwned`, `CopyOnWrite` (-> `MaybeUnique`, `MakeUnique`)
+https://github.com/rust-lang/rust/pull/11230#issuecomment-32708787
+
+GC, `Trace`
+https://github.com/rust-lang/rust/pull/11399#issuecomment-33124755
+https://github.com/rust-lang/rust/pull/11399#issuecomment-33310724
+https://github.com/rust-lang/rust/pull/11399#issuecomment-34439765
+https://github.com/rust-lang/rust/pull/11399#issuecomment-33756578
+https://github.com/rust-lang/rust/pull/11399#issuecomment-33930506
+
+Unboxed trait objects
+https://github.com/rust-lang/rust/issues/11455
+https://github.com/rust-lang/rfcs/pull/105
+https://github.com/rust-lang/rfcs/pull/105#issuecomment-45096279
+https://github.com/rust-lang/rfcs/pull/105#issuecomment-47545719
+
+Deterministic name resolution
+https://github.com/rust-lang/rust/issues/11878
+
+`&out`
+https://github.com/rust-lang/rust/issues/10672#issuecomment-32342797
+https://github.com/rust-lang/rfcs/pull/98
+https://github.com/rust-lang/rfcs/pull/98#issuecomment-44788950
+https://github.com/rust-lang/rfcs/pull/98#issuecomment-46036846
+http://www.reddit.com/r/rust/comments/2b02mb/rust_will_be_the_language_of_the_future/cj94b1c
+
+`UnsafeUnion`
+https://github.com/rust-lang/rfcs/pull/197#issuecomment-52054190
+
+Anonymous sum types
+https://github.com/rust-lang/rust/issues/8277
+
+Generalized destructing struct destructuring
+https://github.com/rust-lang/rust/issues/11855
+
+#compact `struct`, `enum`
+https://github.com/rust-lang/rust/issues/12642
+
+`impl<T: Copy> Copy for &mut T`
+http://discuss.rust-lang.org/t/impl-t-copy-copy-for-mut-t/414
+
+`swap` for `Cell`
+http://discuss.rust-lang.org/t/a-swap-method-for-cell/392
+
