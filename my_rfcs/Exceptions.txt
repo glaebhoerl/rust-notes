@@ -1,0 +1,385 @@
+Language-integrated Result monad (a.k.a. checked exceptions)
+
+Many people suggest general Haskell-style monadic `do` notation to make working with `Result`s nicer, but this is hard to integrate well with the rest of the language (control flow constructs). But approaching it from the opposite direction and adding `Result` semantics to the language natively (to the "ambient monad") to achieve the same goal, just as Rust already does with the ST and IO monads, is extremely straightforward. The result uses the syntax of checked exceptions, but inherits none of the mistakes from existing languages with that feature.
+
+The meaning of the new constructs can be straightforwardly defined as a source-to-source translation to the existing language with `Result`s (see "implementation strategies" section), but need not necessarily be implemented as such.
+
+## Throwing:
+  fn foo(Bar) -> Baz throws bool { ... }
+  `throw false` has type `!`, argument type checked against `throws` clause
+  as with return type, so e.g. `fn foo() throws Box<Any> { throw box 666; }` works
+  every fn/expr has _single_ exception type
+  can throw any type
+  algebraically isomorphic to returning `Result`, but exception is propagated by default
+    functions without a `throws` clause never throw, i.e. the default is `throws !`
+    just like functions which never return are `-> !`
+    (! is uninhabited type which cannot be constructed, means "this can never happen")
+  basically this is making the Either (Result) monad a first-class part of the language, just like we've already done with ST and IO
+    this feels good! right track
+  contract violations are *not* part of `throws` clause and not catchable!!
+    assert/unwrap, array out-of-bounds, RefCell borrow check failure, ...
+  have to add `throws` to type of `fn` pointers, and additional typaram to `Fn` traits, e.g. `trait Fn<Args, Ret, Err>`
+    in surface syntax sugar, Ret defaults to `()` if `->` omitted, and Err to `!` if `throws` omitted
+    this seems reasonable and well-contained
+    other existing things mostly unaffected
+
+
+## Catching:
+  try { EXPR } catch IRR-PAT { EXPR }
+  OR
+  try { EXPR } catch { PAT => EXPR, PAT => EXPR, ... }
+  #2 preferable if want to branch on exception, #1 if not
+    unavoidable excessive rightward drift in one case or the other with only one of these, so have both
+  try-catch is itself an expression! much like if-else
+  types of `try` and `catch` bodies must unify
+  throwable exceptions in `try` must unify to a type `E` 
+  if no exception is thrown, try-catch evaluates to value of `try` block
+  if exception is thrown, it is passed to `catch` block, and try-catch evaluates to value of `catch` block
+  easy translation between exceptions and `Result`:
+      fn result<T, E, Body: FnOnce() -> T throws E>(body: Body) -> Result<T, E> {
+          try { Ok(body()) } catch err { Err(err) }
+      }
+      macro_rules! result { ... } // `result! { ... }` => `result(|| { ... })`
+      fn unwrap<T, E>(result: Result<T, E>) -> T throws E {
+          match result {
+              Ok(a)  => a,
+              Err(e) => throw e
+          }
+      }
+  `result` and `unwrap` witness the isomorphism between `-> A throws B` and `-> Result<A, B>`
+
+
+## Impact
+for full generality HOFs should change to e.g.
+   fn map<A, B, E>(vec: Vec<A>, f: |A| -> B throws E) -> Vec<B> throws E;
+   actually, does this make sense here?
+   if `f` throws an exception both old and new vecs will be lost...
+   but same thing def should make sense for other HOFs (and e.g. `map` taking `&Vec` instead of by move)
+currently you *can't* short-circuit out of map in any way!
+so this is a Pareto-improvement!
+polymorphism over exception types is additional expressiveness relative to current language
+but even w/ current `map()` as-is, can use it with throwing functions by converting to `Result`s with `result!` (and afterwards `unwrap` to rethrow if desired)
+notably the body of `map` doesn't need to change in any way, only its type(?)
+but *don't* need to add E params everywhere: if something doesn't currently return a Result<T, E>, there's no reason for it to throw an E, either!!!
+`throws` is analogous to `Result`, NOT to `fail!()`
+it is completely reasonable for most functions not to throw anything!!
+(do not fall into Java trap of exceptions = shiny toy, want to use them everywhere)
+basically an `fn` is a good candidate for `throws` only if either:
+  * it currently returns `Result`, or
+  * it's a HOF and might want to be generic over the closure's exception type (an expressiveness gain)
+
+## Motivation
+
+You should almost never use exceptions where you don't currently use `Result`, the exception is HOFs where you may want to parameterize over the exception type, improving expressiveness.
+It's painfully clear that e.g. we would want to use `throws IoError` in `std::io`!
+Any lib which defines `type MyResult<T> = Result<T, MyError>` and uses it everywhere would want to use `throws`.
+There are a few of these!
+(Maybe it's even a best practice for each lib to have its own error enum like this. Maybe the lack of union types (multiple throwable exception types) is not a bad thing at all!! Encourages good practice of encapsulating errors from upstream.)
+(future: interacts nicely w/ datasort refinements?)
+If an interface doesn't allow throwing exceptions, but you want to call exception-throwing methods in impl (also for e.g. HOF args), you can convert to a Result with `result!`. Any impedance mismatch is dead easy to resolve.
+This is not a world-changing feature, just an incremental improvement over working with `Result`s.
+Might seem like a major feature, but really... not that much.
+
+Really *just* a control flow construct!! No hand-waving about "truly exceptional circumstances" & similar bullshit!! Choice between `Result` and `throws` based on ergonomics _only_.
+
+We're already using checked exceptions with Result<T, E>, we're just doing the propagation by hand, and `T throws E` is just a `Result<T, E>` where propagation happens in the language.
+
+Benefits of `throws`:
+ - Automatically propagated
+ - Can handle exceptions from multiple function calls in a single block without cluttering control flow
+
+Use `throws` if:
+ - Callers may want to call many functions which throw the same exception type
+ - Callers want to propagate exceptions
+
+misc tangential note: handling fail!() at task boundaries is a form of harm reduction. I.e. the program has a flaw (or perhaps environment, configuration does), but maybe we can fail less-than-catastrophically. Aborting program and writing "fix your program, dumbass" to console not so awesome in production environment.
+
+
+## Problems with checked exceptions in Java:
+ - All exceptions must derive from an `Exception` class. Cannot throw any type.
+ - Bad/incomplete support for being generic over exception types:
+     http://literatejava.com/exceptions/checked-exceptions-javas-biggest-mistake/
+     http://c2.com/cgi/wiki?TheProblemWithCheckedExceptions
+     related to throwing multiple, rather than single exception type
+ - Severe over(ab)use in common APIs
+ - APIs have exception types which don't contain any useful information, just an error string => no reasonable way to handle them besides ignoring/logging/aborting
+ - They don't have a `Result` type to "bottle up" an exception to bridge signature mismatches (e.g. with J8 lambdas).
+Rust doesn't have, nor needs to copy, _any_ of these mistakes!!
+
+http://twistedoakstudios.com/blog/Post399_improving-checked-exceptions
+Verbosity of declaring exception types: not a problem in Rust. Declare an enum of possible errors, throw that enum.
+Abstracting over exception types also not a problem in Rust. Rust generics are up to the task! (Single exception type rather than multiple doesn't hurt, either.)
+Catching and rethrowing as different exception type might still be annoying. But: not any more so than the same thing with `Result`.
+
+TODO add some examples, translate existing `Result` code
+
+
+## QUESTIONS
+
+### Impact on unsafe code?
+  Could even disallow throwing inside `unsafe`, require the exception type of `unsafe { }` to be `!`.
+  (Or just have a lint...)
+
+  Along similar lines... we could have task failure unwinding through an `unsafe { }` become a process abort.
+  This doesn't absolve `unsafe` from having to think about exception (failure, panic, despair) safety, but does prevent it from implicating type/memory safety/security. (=> harm reduction)
+  Would kinda imply that `unsafe fn` may not fail... is that bad?
+
+### Destructors
+  Destructors (Drop::drop()), as the signature says, can't throw anything. Which is exactly as it should be.
+
+### Do we need task-like isolation with Send here? What does exception safety mean?
+  "If you catch unwinding in a local heap and attempt resumption, you have no idea what state it's in."
+  
+  "You still have to write in "worry about exceptions everywhere style inside a try-block or function-that-rethrows. Only get to avoid it when you're insulating yourself by the implicit "throw ()" declaration."
+  
+  "What's problematic about exceptions in C++, and what forces you to "worry about exceptions everywhere", is that code inside a try-block and code outside of it may share state, which the code in the try block may be in various stages of modifying (along with allocating resources) when the exception is thrown, potentially leaving an inconsistent state and/or leaked resources at the point where the exception is caught. Therefore all functions have to be very careful that any mutable state accessible to the function is in (or reverts to) a consistent state at any point where an exception might be thrown, and that resources aren't left dangling, because who knows whether that mutable state might not be on the outside of a try-block and the function on the inside of it."
+  
+  "The important conclusion to drive home from this discussion is that, to make a sequence of function calls strong, you need to structure it as a pure subsequence (possibly altering local automatic data), followed by no more than one strong call, followed by a nothrow subsequence. This is exactly what the “assignment-through-swap idiom” [6] does (actually, Dave proved that all strong functions have this form, but the proof does not fit in the margin of this text)." [note: by recursively "inlining" the one strong call in the middle, we can see that this actually boils down to just a pure subsequence then a nothrow subsequence]
+
+http://www.reddit.com/r/rust/comments/2ejxk6/minutes_from_last_weeks_workweek_lots_here/ck4vekz
+http://permalink.gmane.org/gmane.comp.lang.rust.devel/4051
+http://www.jot.fm/issues/issue_2011_01/article1.pdf
+http://erdani.com/publications/cuj-2003-12.pdf
+  
+Should `try` blocks have a `Send` requirement?
+Is this necessary and/or sufficient?
+
+`Send` seems like both too much and not enough:
+`&` refs are not `Send` but should be completely OK, except for maybe `&Cell` & co.
+But if `&Cell` is a problem, then so is `Arc<AtomicFoo>`, which /is/ `Send`
+So what exactly do we want?
+Can we do better than "best effort"?
+Does this tie in to purity in any way... ?
+  Yes: if the `try` block is not passed any cap, then `&Cell` and `Arc<AtomicFoo>` are ruled out.
+  But then: what is the conclusion? Requiring `try` be pure would be ridiculous.
+  And we want to allow moving into it, I think.
+
+The shape of things seems to be:
+ * We get the "basic" guarantee for free because of safety & destructors.
+ * We need some kind of restriction on `try` and/or throwing functions to get the strong guarantee.
+
+Requirement for a strong fn seems to be (according to both papers): all throwing precedes all observable mutating.
+Observable by whom?? apparently: function with `try` block
+Is this restriction on functions more liberal or more restrictive than putting a restriction on `try`??
+=> Think either of these on its own is a sufficient condition for strong guarantee!
+Which restriction is less unpleasant?
+Can the restriction on functions be done in the borrow checker?
+
+How important is the strong guarantee? Is it worth a restriction?
+
+W.r.t. Arc<AtomicFoo>:
+We can't provide the strong guarantee for external IO, only for in-program structures. (neither can anyone else)
+Atomic ops are basically IO. Same for Cell?
+Given that safety is not implicated, how valuable is this incomplete strong guarantee?
+
+Even in C++, usual recommendation is to provide strong guarantee only if cost is acceptably low, not otherwise.
+
+If we don't enforce strong guarantee, then:
+ * The basic guarantee still comes for free
+ * Code which has to think about exception safety in the sense of the strong guarantee is:
+   - Code inside functions with a `throws` clause
+   - Code inside `try` blocks
+   but this should be something like 10% of all code at most.
+So this is _much, much_ less bad than C++!
+In C++:
+  100% of code has to think about exception safety, 
+  they're not present in the types,
+  and even the basic guarantee has to be ensured manually.
+Maybe if the "exception safety problem" is reduced by two orders of magnitude, then it stops being an "important problem", and is just a thing.
+So the tradeoff is between 10% of code having to think about basic vs. strong guarantee, or a `Send`-like restriction on `try` blocks to enforce strong guarantee.
+Experience would probably reveal which is preferable.
+
+Or perhaps a compromise: provide restriction on `try` and/or throwing functions as a lint, let individual codebases enforce the strong guarantee if they want to.
+
+### Do we want/need a finally clause?
+  nope, don't think so. only wanted for cleanup / resource release. have destructors. destructors can't throw. life is good.
+
+### Interaction with linear types (&out)
+  exception is part of type, so we can easily forbid calling `throws` functions while an `&out` is in scope, just as we would forbid `return`
+
+### Can+should we give any kind of meaning to a `try { ... }` block without a `catch`?
+  enforce that no exceptions are thrown?              => doesn't seem useful
+  turn any exceptions into task failures?             => doesn't seem wise, should be explicit
+  silently ignore any exceptions?                     => same here
+  return a `Result<T, E>`, i.e. instead of `result!`? => seems ad hoc and not that valuable
+  => so maybe we could, but doesn't seem like we should
+
+### Rethrowing as different exception, convenience thereof
+Haskell: 
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept f foo
+withExcept (\e -> f e) foo
+
+Rust:
+try { foo() } catch e { throw f(e) }
+fn with_except<T, E1, E2>(f: FnOnce(E1) -> E2, exp: FnOnce() -> T throws E1) -> T throws E2 {
+    try { exp() } catch e { throw f(e) }
+}
+with_except(|e| f(e), || foo()) // how much better is this?
+with_except(f, || foo())        // a bit better.. but only for single-funcall
+macro_rules! with_except { ... }
+with_except!(|e| f(e), foo())
+working around our awkward function call and lambda syntax here... `do` sugar?
+do with_except(|e| f(e)) { foo() }
+meh
+
+`throw as` sugar? how exactly?
+EXPR throw as ...?
+specify a function? call out to a trait?
+EXPR throw PAT as EXPR? is this syntactically unambiguous?
+
+    try { foo() } catch e { throw f(e) }
+    with_except(|e| f(e), || foo())
+    foo() throw e as f(e)
+    throw e as f(e) in foo()
+    throw e in foo() as f(e)
+    in foo() throw e as f(e)
+
+    try { foo() } throw as f(_) (partial application / implicit closure)
+
+not sure how important this is... there's basically no language ever where this is convenient
+and Rust is better than most
+and it's probably still better than `match`ing on `Result`s
+can maybe get close to the ideal w/ union types:
+    try {
+        throws_a();
+        throws_b();
+        throws_c();
+    } catch {
+        e is A => throw WrapA(e),
+        e is B => throw WrapB(e),
+        e is C => throw WrapC(e)
+    }
+(still a bit of repetition in there.. a macro? some trait impled for A, B, and C?)
+but the logic isn't usually this "dumb"
+downstream exceptions /shouldn't/ usually map 1-to-1 with upstream! is bad design
+
+
+### Misc
+
+also from Haskell: `Alternative`: combine exceptions if type is Monoid/Semigroup?
+
+`throw` would also interact pleasantly with `let`..`else`, which we should add
+
+
+### throwing ()
+Should we have an attitude about `fn foo() -> Foo throws () { ... }`?
+It seems strange coming from traditional exception handling systems, and first reaction might be to say "don't do that". But this is *not* a traditional exception handling system!
+It's completely isomorphic to returning `Option<Foo>` or `Result<Foo, ()>`, so it's possible that this should be /encouraged/, just as those are/were.
+Do whatever works the best in practice. No preconceptions!
+
+Allow just `throw` desugaring to `throw ()`, as with `return`?
+
+
+### Implementation strategies
+1. compile down to Result-alike
+struct InternalResult<T, E> { InternalOk(T), InternalErr(E) }
+
+fn foo() -> T throws E { ...CODE... }
+becomes
+fn foo() -> InternalResult<T, E> { InternalOk({ ...CODE... }) }
+ 
+return x
+becomes
+return InternalOk(x)
+
+throw x
+becomes
+return InternalErr(x)
+
+bar(foo())
+becomes
+bar(match foo() { InternalOk(x) => x, InternalErr(y) => throw y })
+
+try { bar(foo()) } catch e { baz(e) }
+becomes
+match (|| bar(foo()))() { InternalOk(x) => x, InternalErr(e) => baz(e) }
+
+...etc...
+should be pretty mechanical
+might want to add support for `!` as first class type to avoid having to special-case throwing vs. non-throwing functions
+(but we should want to do that anyways)
+
+2. unwinding
+like C++ & current fail!()
+probs easier than C++ because everything only throws single exception type, each `try` has only one `catch`, catches everything
+(well, except for task failure...)
+complication:
+fn foo() throws Box<int> { ... }
+fn bar() throws Box<Show> { foo() }
+probably need some special handling here, e.g. implicit catch-and-rethrow around body of function
+
+
+
+
+
+
+## FUTURE WORK
+
+Union types
+Would allow throwing/propagating multiple types of exceptions and catching based on type
+I.e. like Java
+Not clear if this is actually a good idea! Maybe it's always / almost always preferable to use enums and trait objects.
+And there are some awkward questions and potentially far-reaching implications.
+
+Union types:
+  Either<A, B, C, D> (variadic)
+  Can be any of A, B, C, or D
+  Like `Any`, but restricted to a set of listed types
+  Represented as (TypeId, UnsafeUnion<A, B, C, D>) (~ enums)
+  Either<Types..., T> = Either<Types...> if contains(Types, T)
+  also reordering. basically, a type-level set.
+  T is *implicitly* coerced to Either<..., T, ...>
+  can test contained type like with `Any`, or use type-match
+  QUESTION what if Types contains trait objects?
+    avoid trait object auto-coercing in this case?
+  QUESTION what if Types contains a type variable?
+    does this work out OK? forbid it?
+  QUESTION what if Types contains another `Either`?
+    would naively lead to nested TypeIds
+    do that? flatten it? forbid it?
+    should be able to go from A to Either<A, B, C> *and* from Either<A, B> to Either<A, B, C>...
+  QUESTION is this related to OCaml's polymorphic variants?
+  special syntax: (A|B|C), A || B || C, A or B or C, ... ?
+    (A|B|C) with `foo is Type` for matching works out OK (no conflict with disjunction patterns)
+  (A|B|C) is a closed trait! (see also privacy reform rfc)
+
+Type match:
+  foo: (int|bool|char)
+  match foo {
+      i is int => ...
+      b is bool => ...
+      c is char => ...
+  }
+  or:
+    `i: int =>` (conflict: type ascription)
+    `i as int =>` (conflict: planned name binding)
+    `(type int, i) =>` (accurate but ugly)
+  because set of types is fixed, can check exhaustiveness
+  (perhaps also allow this for "unrestricted" Any and require a wildcard?)
+
+QUESTION
+if I write try { throws_a(); throws_b(); } catch ...
+is the exception type *inferred* to be (A|B)?
+if no  => need to annotate every throwable type?
+if yes => are they inferred in other places? why or why not?
+e.g. `if foo { a } else { b }` shouldn't be inferred as (A|B)... that's ridiculous
+...maybe it can be inferred from the catch block?
+e.g. try { a(); b(); } catch { e is Foo => ..., e is Bar => ... }
+we could(?) infer from the catch-block that the exception-type of the try-block is a union-type
+
+
+## The two together:
+  fn some_op(arg: int) -> String throws (IoError|ApiError) { ... }
+  fn other_op(arg: int) throws IoError {
+      try { 
+          println!("success: {}", some_op(arg))
+      } catch {
+          ae is ApiError => println!("api err: {}", ae),
+          ie is IoError  => throw ie
+      }
+      // some_op(arg); error: can't throw ApiError
+      // throw 9i; error: can't throw int
+  }
+  have to list throwable type(s) explicitly, type error if you try to throw something not listed, but propagation is implicit
+  (unhandled errors must be rethrown explicitly... not sure if this is a problem)
