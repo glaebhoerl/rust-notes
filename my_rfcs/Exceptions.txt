@@ -4,6 +4,11 @@ Many people suggest general Haskell-style monadic `do` notation to make working 
 
 The meaning of the new constructs can be straightforwardly defined as a source-to-source translation to the existing language with `Result`s (see "implementation strategies" section), but need not necessarily be implemented as such.
 
+NOTE 
+I've since become fond of an alternative "polymorphic synthesis" formulation which also reintroduces the `?` operator, see far below.
+But don't skip, because that part builds on the stuff in these parts!
+
+
 ## Throwing:
   fn foo(Bar) -> Baz throws bool { ... }
   `throw false` has type `!`, argument type checked against `throws` clause
@@ -294,6 +299,9 @@ bar(match foo() { InternalOk(x) => x, InternalErr(y) => throw y })
 try { bar(foo()) } catch e { baz(e) }
 becomes
 match (|| bar(foo()))() { InternalOk(x) => x, InternalErr(e) => baz(e) }
+or actually: this would/should use not-yet-implemented "early return from any block" feature, not lambda!
+  (`return` inside `try` should return from whole function, not just `try` block!)
+  (see "polymorphic synthesis" alternative below)
 
 ...etc...
 should be pretty mechanical
@@ -311,10 +319,249 @@ probably need some special handling here, e.g. implicit catch-and-rethrow around
 
 
 
+## ALTERNATIVES
+
+### just current language + `?`
+
+could just add postfix `?` operator to current language to propagate exceptions explicitly, as in aturon's proposal
+on its own this is not too bad for writing, and maybe even a benefit for reading (throwing calls are syntactically distinguished)
+  for the record, could also require an `?` on throwing calls in the above proposal as-is, w/ no other changes!
+  so this should *not* be counted as a benefit of this alternative; at best, as the absence of a drawback!
+but this is not the only thing: ergonomic costs across the board:
+
+foo().bar().baz()
+vs.
+foo()?.bar()?.baz()
+
+throw foo
+vs.
+return Err(foo)
+
+return foo
+vs.
+return Ok(foo)
+
+fn { ...; result }
+vs.
+fn { ...; Ok(result) }
+
+try { foo().bar() } catch e { baz(e) }
+vs.
+match foo() { Ok(res) => res.bar(), Err(e) => baz(e) }
+this is in the simplest case where only `foo()` throws!
+gets progressively worse (pattern matching gunk) as the body of `try { }` does more things
+
+basically:
+ * not only "throwing" but also "normal" code paths are penalized, and
+ * lack of try-catch is the biggest single pain point
+
+main benefit of this approach is it avoids duplication
+no need to choose between `throws` and `Result`, there is only `Result`
+
+
+### a polymorphic synthesis?
+
+...could maybe do a thing where the two are combined:
+add `?` *and* `try`..`catch`,`throw` and `throws`
+main idea is that _all_ of these "desugar" to being polymorphic over any appropriate type (Result, Option, etc.), using a trait
+normal fn calls return the Result (or whichever type) directly, propagation must be explicitly requested with `?`
+`?` inside a `try`-`catch` only propagates up to the `try`, not out of whole fn!
+`return` still returns from whole fn
+`throws` makes the fn polymorphic over any result-like-type, but can also use `?`, `throw` and `try`..`catch` with concrete result-like-types
+  just like for traits/type classes in general (can parameterize fn over `Eq`, but can also `==` concrete `int`s)
+
+#### variations on the trait
+
+all of these are equivalent!
+meaning is essentially "is isomorphic to Result<Normal, Exception> for some types Normal and Exception"
+
+#lang(carrier)
+trait Carrier {
+    type Normal;
+    type Exception;
+    $METHODS
+}
+
+where $METHODS in:
+
+1. explicit isomorphism with `Result`
+    fn from_result(Result<Normal, Exception>) -> Self;
+    fn to_result(Self) -> Result<Normal, Exception>;
+
+laws:
+    from_result(to_result(x)) = x
+    to_result(from_result(x)) = x
+
+laws for the others below should be "the same"!
+left as an excercise for the reader
+
+2. avoid mentioning `Result`, most naive version
+    fn normal(Normal) -> Self;
+    fn exception(Exception) -> Self;
+    fn is_normal(&Self) -> bool;
+    fn is_exception(&Self) -> bool;
+    fn assert_normal(Self) -> Normal;
+    fn assert_exception(Self) -> Exception;
+
+3. destructuring w/ Scott
+    fn normal(Normal) -> Self;
+    fn exception(Exception) -> Self;
+    fn match_carrier<T>(Self, FnOnce(Normal) -> T, FnOnce(Exception) -> T) -> T;
+
+probably the right approach for Haskell, & probably not for Rust
+e.g. two closures cannot share environment! awkward.
+
+4. such elegant, wow
+    fn normal(Normal) -> Self;
+    fn exception(Exception) -> Self;
+    fn translate<Other: Carrier<Normal=Normal, Exception=Exception>>(Self) -> Other;
+
+can instantiate `Other` with any concrete carrier type, e.g. `Result` or `Option` (then e.g. pattern match on it, or w/e)
+(`translate` smells like a natural transformation...)
+
+5. Scott II
+
+   trait BiOnceFn {
+       type Args1;
+       type Args2;
+       type Ret;
+       fn call1(Self, Args1) -> Ret;
+       fn call2(Self, Args2) -> Ret;
+   }
+
+   trait Carrier {
+       type Normal;
+       type Exception;
+       fn normal(Normal) -> Self;
+       fn exception(Exception) -> Self;
+       fn match_carrier<T>(Self, BiOnceFn<Args1=Normal, Args2=Exception, Ret=T>) -> T;
+   }
+
+now the cannot-share-environment problem is solved!
+is generalization of 4. (with `call1()`=`normal()`, `call2()`=`exception()`)
+
+...and there's probably more...
+(e.g. a concrete `try_catch` method?)
+
+#### `impl`s of `Carrier`
+
+method defns for 1..3 should be obvious; 5. is structurally similar to 4.; will go with 4. to illustrate
+
+impl<T, E> Carrier for Result<T, E> {
+    type Normal = T;
+    type Exception = E;
+    fn normal(a: T) -> Result<T, E> { Ok(a) }
+    fn exception(e: E) -> Result<T, E> { Err(e) }
+    fn translate<Other: Carrier<Normal=T, Exception=E>>(result: Result<T, E>) -> Other {
+        match result {
+            Ok(a) => normal(a),
+            Err(e) => exception(e)
+        }
+    }
+}
+
+impl<T> Carrier for Option<T> {
+    type Normal = T;
+    type Exception = ();
+    fn normal(a: T) -> Option<T> { Some(a) }
+    fn exception(e: ()) -> Option<T> { None }
+    fn translate<Other: Carrier<Normal=T, Exception=()>>(option: Option<T>) -> Other {
+        match option {
+            Some(a) => normal(a),
+            None => exception(())
+        }
+    }
+}
+
+impl Carrier for bool {
+    type Normal = ();
+    type Exception = ();
+    fn normal(a: ()) -> bool { true }
+    fn exception(e: ()) -> bool { false }
+    fn translate<Other: Carrier<Normal=(), Exception=()>>(b: bool) -> Other {
+        match b {
+            true => normal(()),
+            false => exception(())
+        }
+    }
+}
+
+should avoid getting too creative w/ evil impls!
+e.g. impl for `Vec` with `Exception=()` and exception being the empty `Vec` would be quite icky
+want to avoid this for the same reason that we don't consider empty `Vec` and `0` to be "false" in `if` condition
+presumably an impl is OK iff: it obeys the laws! (so impl for `bool` is at worst too cute; but not evil)
+
+translating between carrier types should be a no-op most of the time
+we should have it so that
+  repr(bool) = repr(Option<()>) = repr(Result<(), ()>)
+  repr(Option<T>) = repr(Result<T, ()>)
+etc.
+
+#### Elaboration of constructs (finally)
+
+involves "early return from any block" feature, which /should/ be added independently (but could also be done under the hood without exposing it)
+existing `return EXPR` is extended with an optional lifetime/scope argument: `return 'a EXPR`
+  alternately could extend `break` with an optional value argument, & make it work for not just loops; the choice is irrelevant here
+causes early exit from block 'a with the value EXPR (types of course must match)
+default if not specified is to return from whole fn, like currently
+  iow magical lifetime 'fn which refers to outermost block of function
+
+throw EXPR
+=>
+return 'here Carrier::exception(EXPR)
+where 'here is innermost enclosing `try` block, or 'fn if none
+
+EXPR?
+=>
+match translate(EXPR) { Ok(a) => a, Err(e) => throw e }
+
+try { foo()?.bar() }
+=>
+'here: { Carrier::normal(foo()?.bar()) }
+here it does make sense to define `try { }` without a catch as returning the carrier directly!
+because we are defining everything in terms of them anyhow
+and it's useful (coalesce multiple potential `?` propagations into single result)
+
+try { foo()?.bar() } catch e { baz(e) }
+=>
+match try { foo()?.bar() } { Ok(a) => a, Err(e) => baz(e) }
+
+try { foo()?.bar() } catch { A(e) => baz(e), B(e) => quux(e) }
+=>
+try { foo()?.bar() } catch e { match e { A(e) => baz(e), B(e) => quux(e) } }
+(same thing, just more convenient to match immediately sometimes, & match rhymes with catch)
+
+fn foo(A) -> B throws C { CODE }
+=>
+fn foo<Car: Carrier<Normal=B, Exception=C>>(A) -> Car { try { CODE } }
+this accomplishes two things:
+  `foo` is polymorphic over carrier type
+  gets rid of syntactic overhead for "normal" case, e.g. CODE can be just `make_b()` instead of `Ok(make_b())`
+
+extending `throws` to HOFs might be hairier, but seems like it should also work out OK, *if* we want to; just introduce Carrier typarams as necessary
+(would also be simpler than OP, b/c `Fn`{,`Mut`,`Once`} would not need to be changed! could just desugar to the result type being a carrier)
+
+typing rules for new constructs should be the same as for the elaborated expressions, or mostly anyways
+if carrier type is ever underconstrained, could just default it to `Result` (would involve making it a lang item)
+if we have explicit `?` to propagate we probably don't need to worry so much about exception safety either
+(believe "exception unsafety" phenomenon partly arises due to propagation being invisible)
+
+above I've defined each construct in terms of the previous ones to avoid wearing out my typing fingers
+but they are relatively easily separable (just inline the removed ones)
+could have just `?`, or `?` and `try`..`catch` but not `throw`/`throws`, etc.
+but they're all nice & useful & well behaved
+`throw` and `throws` are the weakest links
+I love how cleanly they all fit together
 
 
 
-## FUTURE WORK
+
+
+
+
+
+
+## POTENTIAL FUTURE WORK
 
 Union types
 Would allow throwing/propagating multiple types of exceptions and catching based on type

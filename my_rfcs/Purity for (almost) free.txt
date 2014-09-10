@@ -1,6 +1,7 @@
 ## Purity for (almost) free
   "Ask not what you can do for purity, but what purity can do for you"
  - requires changing very little
+ - the language / type system already has everything we need!!
  - the goal is only to know what functions _can't_ do
  - what we choose to require is that bare functions and closures with immutable environments can't do IO without having an IO permission passed in
  - we achieve this by passing around IO capabilities/permissions, which can only be duplicated given unique/mutable access
@@ -99,6 +100,7 @@
   * supercompilation?!
  QUESTION would this also help with e.g. "cleanness" of pattern matching via `Deref`*? 
    definitely for plain `Deref`, maybe less so for `DerefMut`
+   but would likely get benefit across the board w/ mutability polymorphism formulation!
  Q: "But what about logging?!"
  A: "Just pass in a (mut reference to the) logger!" (you should do this anyways)
  Q: "What about random number generation?"
@@ -152,8 +154,8 @@ impl Capability for IO   {                    }
 LANGUAGE DEF:
  * Functions which do not have unique access to any Cap must be pure.
    TODO make this precise w.r.t. arguments, &, &mut, lifetimes etc.!
-   but basically, a function taking only & and primitive data must be pure in the Haskell sense
-   if you get passed an &mut, you also receive permission to mutate it
+   but basically, a function taking only & refs must be pure in the Haskell sense
+   an `fn foo(&mut int)` can mutate the int, but nothing else
    etc.
  * Functions which do not have unique access to a Comm may not have effects outside of the current task.
  * Functions which do not have unique access to an IO may not have effects outside of the current process.
@@ -290,6 +292,15 @@ other than by using react/exec there's no way to "see" what's inside an EventStr
 
 purity lets us separate manipulating-effectful-closures from invoking-effectful-closures in the types, just like Haskell
 basically Haskell's `a -> b` is our `&Fn(&A) -> B`, and their `IO a` is our `&Fn(IO) -> T` (except `Gc` instead of `&`, but w/e)
+
+
+### Misc
+
+if `File::open()` takes an `IO` cap and stores it in the `File`, but does not expose it, and the methods do not take `IO` caps, then:
+
+    fn frob_file(&mut File);
+
+can be known to potentially do I/O on the given file, but _nothing else_!
 
 
 ### Parallelization

@@ -47,10 +47,10 @@ Philosophy
       QUESTION require :: to refer to crate root in `use`? is the crate root in scope everywhere by default?
       crate { lib.rs: mod parent { extern mod foo; } foo.rs: { ...BODY... } }
       => crate { mod parent { use foo; ... } mod foo { use super = parent; ... BODY ... }
-    ? Remove subtyping and variances (only sublifetimes, but not sub*type*s)
+    ? Remove subtyping and variances (only sublifetimes, but not sub*type*s?)
     ? Automatic coercions reform (`as` reform?)
-    * Linear types (QUESTION: unwinding)
-      Require explicit `Drop` bounds?
+    * Linear types
+      Unwinding? Require explicit `Drop` bounds?
     * Parametricity
       * QUESTION: how to reconcile with trait SizeOf<T> { static N: uint } forall types?
         trait SizeOf<T> { static SIZE_OF: uint; }; 
@@ -70,16 +70,13 @@ Philosophy
         #[attr]         -> #attr (like hashtags => suggestive of metadata)
         name@pat        -> pat as name
         <'a> |&'a Foo|  -> for<'a> |&'a Foo|
+        &'a mut Foo     -> &mut 'a Foo
         extern "C"      -> extern C, extern<C>, or extern(C) (SUBMITTED)
         foo::<T>        -> foo@<T> (remove confusion w/ module scoping)
-        foo<'a>         -> foo<lifetime a> or foo<scope a>
+        fn foo<'a>      -> fn foo<lifetime a> or fn foo<scope a>
         &'a Foo         -> &(a) Foo or &{a} Foo (braces are suggestive of scopes)
-        &'a mut Foo     -> &mut(a) Foo or &mut{a} Foo
-    * General function-like generics syntax sugar
-        type Proc(A) -> R = Box<Send + FnOnce(A) -> R>;
-        QUESTION where to put lifetimes (&mut FnMut...)
-        (general guideline: use for things that (could) impl... Fn? Category? Profunctor?)
   # IMPORTANT
+    * "Mutability polymorphism"
     * Exception handling a la Either monad (FIGURED OUT)
     * trait Trait1 + Trait2 (PARTIALLY IMPLEMENTED)
     * trait Transmute<T> (SUBMITTED BY gereeter)
@@ -91,13 +88,17 @@ Philosophy
     * Associated types (SUBMITTED BY aturon)
     * Macro reform
   # MINOR
+    * General function-like generics syntax sugar
+        type Proc(A) -> R = Box<Send + FnOnce(A) -> R>;
+      QUESTION where to put lifetimes (&mut FnMut...)
+      (general guideline: use for things that (could) impl... Fn? Category? Profunctor?)
     * UnsafeUnion<A, B>
     ? Incoherent empty traits
     * Associated statics (SUBMITTED BY aturon)
     ? Anonymous sum types (int|bool|char)
-    * enum bool { false, true }, all two-nullary-variant enums repr.-ed the same (BIC?)
-      generally: guarantee all merely-alpha-renamed structs, tuples, enums repr.-ed the same?
-    * Early return from any block (like `break`, but not just loops)
+    * enum bool { false, true }, all two-nullary-variant enums repr.-ed the same as a bool (BIC?)
+      generally: guarantee all merely-alpha-renamed structs, tuples, enums repr.-ed the same? (no reason not to)
+    * Early return from any block (like `break`, but not just loops, and with a value)
     * Explicit refutable `let`: `let`..`else`
     * Scoped refutable `let`: `if let` (SUBMITTED BY kballard, ACCEPTED)
     * Expose tuple fields as .0 .1 ... .N (SUBMITTED BY P1Start, ACCEPTED)
@@ -108,24 +109,30 @@ Philosophy
     * Liberalized destructing struct destructuring
     ? Limited type inference for `static` items
     * #compact struct, enum
-    ? Generalized object literals (closures) for any trait, not just `Fn`* 
+    ? Generalized unboxed object literals (closures) for any trait, not just `Fn`* 
         QUESTION syntax: impl-like? closure-like? struct-like?
           let num = 42;
-          let obj = object (Show + Hash) {
-              show: || num.to_str(),
-              hash: || num
+          let showable_obj = &Show {
+              show: num.to_str()
           };
-          self is implicit?! like fn closures
+        self is implicit?! like fn closures
+        see `BiOnceFn` in Exceptions for compelling use case!
+          let my_bi_fn = box BiOnceFn {
+              call1(n): num + n,
+              call2(m): num * m
+          };
     * for<T1..TN> { ..items.. } (SUBMITTED BY ben0x539, POSTPONED)
     * Naming wibbles:
         macro_rules! -> macro!, define!
         Any          -> Dynamic
         Arc          -> AtomicRc
-        Option       -> Maybe, Optional, Nullable
+        Option       -> Maybe  (Optional,   Nullable)
+        Some|None    -> Yes|No (Full|Empty, Val|Null)
+        unwrap       -> assert (goes well w/ Yes|No)
         Void         -> Never
+        int, uint    -> isize, usize
+        char         -> Char (no need to confuse w/ C char)
         Iterator     -> Iterate? (or maybe Iterable -> Iterate)
-        char         -> Char? (no need to confuse w/ C char)
-        int, uint    -> isize, usize?
   # FAR FUTURE
     * `static` generics parameters
     * Generic generics parameters (HKT)
@@ -149,10 +156,16 @@ Philosophy
  * What's the conflict between modules and macros?
  * Why isn't a simple newtype-based design sufficient for HashMap?
  * Is `Arrow` connected to linear logic/types? (To closed (symmetric) monoidal categories?)
+ * Is there a relationship between traits and copatterns/codata? https://github.com/idris-lang/Idris-dev/wiki/Copatterns
  * Is there a description/paper about UHC's implementation of existential types?
- * How can safety of (multiply-)intrusive data structures be proved in general?
+ * How can safety of (multiply-)intrusive data structures be proved / reasoned about in general?
  * https://github.com/rust-lang/meeting-minutes/blob/master/workweek-2014-08-18/associated-items.md
    => What are path dependent types?
+   Same thing as this? http://stackoverflow.com/questions/2693067/what-is-meant-by-scalas-path-dependent-types
+   Where do they occur in Rust? (Something to do with trait objects?)
+ * Is it possible that we might want bidirectional type inference instead of HM?
+   The biggest "drawback" usually cited for BiDiTI is that it requires type signatures on top-level definitions.
+   But we already require that!
 
 
 ## LANG ITEMS PROBLEM
@@ -160,23 +173,27 @@ There are many language features which would be backwards-compatible additions, 
 Examples:
  * `Fn`* want associated types.
  * `Fn`* may want arity polymorphism.
- * `Fn`* are impacted by exceptions.
  * `Iterator` wants associated types and `&move`.
  * `Deref`* and `Alloc` (for `box`) want HKTs.
  * `Alloc` wants `&out`.
- * `Deref` traits might want "mutability polymorphism"?
+ * `Deref`, `Fn`, `Index` want mutability polymorphism!
 Just declare these unstable, and move on? Or what?
 Specific features:
  * We're already adding assoc types.
  * If it's not much work on top of static drop analysis, we should just add `&out` (and `&move`?).
  * HKTs are harder.
  * Arity polymorphism: definitely not yet.
- * Exceptions... not actually that hard. Dunno.
- 
+ * Mutability polymorphism: seems like a big change.
+Likewise for standard library... if we want to add everything that might impact std before 1.0, we're going to end up adding /every/ major feature before 1.0.
+If a feature didn't have an impact on libraries, it wouldn't be major.
+Only real solution is to version stdlib.
+
 
 
 ## How `box` should work
 
+// should prob be called something different if we're going to have a separate trait for allocators
+// but maybe that should be called RawAlloc or w/e
 trait Alloc {
     type Where = ();
     fn alloc<T>(self: &out Self<T>, where: Where) -> &out T; // HKT
@@ -232,6 +249,62 @@ can _temporarily_ move out of smart pointers with DerefMut by general mechanism 
 moving out permanently prob needs Dealloc/DerefMove like above
 
 
+## MUTABILITY POLYMORPHISM
+move mutability from reference types onto lifetimes
+this is what Disciple does!!
+lifetimes can have constraints e.g. "mutable", "unaliased", "shared", w/e
+("lifetime" nomenclature stops being so helpful - difficult to envision a lifetime having a mutability; a "region" less so)
+instead of current 2 reference types (+ more in the future), would have only one, parameterized over a lifetime, which in turn over mutability
+can be either polymorphic over constraints-on-lifetimes or specify constraints; constraints can conflict
+current set of constraints would be: shared, mut (which conflict)
+this would essentially be reifying existing borrow checker rules/logic into language constructs
+can mostly (entirely?) keep existing (quite nice) surface syntax as sugar for more sophisticated underlying mechanisms
+example: instead of separate `Deref` traits for shared and mutable refs, could have just a single one
+    trait Deref<constraints cs> {
+        fn deref<T, 'a: cs>(&'a Self<T>) -> &'a T; // also HKT here, but orthogonal
+    }
+    impl<constraints cs> Deref<cs> for Box { ... } // equiv of both existing `Deref` and `DerefMut`
+    impl Deref<shared> for Rc { ... } // equiv of just existing `Deref`
+  could also `impl Deref<mut> for ...` if that's ever desired (just `DerefMut`)
+  likewise for `Fn`, `Index`, ...?
+could extend lifetime elision to also elaborate mutabilities/constraints
+with `&?" to denote a reference of unspecified constraints (plain `&` continues to mean "shared"):
+    fn get_member(self: &? Foo) -> &? Bar;
+elaborates to:
+    fn get_member<constraints cs, 'a: cs>(self: &'a Foo) -> &'a Bar;
+putting the constraint in the ref type is just sugar for the same constraint on the lifetime
+    `fn foo(&mut int)`        -> `fn foo<'a: mut>(&'a int)`
+    `fn foo<'a>(&'a mut int)` -> `fn foo<'a: mut>(&'a int)`
+built-in traits on `&` determined by constraints on lifetime
+    impl<T, 'a: shared> Copy for &'a T { }
+can expand the set of constraints to "add more reference types", with repercussions
+  `uniq`: conflicts with `shared`, implied by `mut`
+  `read`: can be read from ("is initialized"). implied by `shared`, `mut`, `move`
+  `move`: "is initialized, must be deinitialized" implies `mut`, `uniq`, and `read`
+  `out`: "is uninitialized, must be initialized" implies `uniq`, conflicts with `read`
+  has further ramifications for built-in traits & "default assumptions"
+  a ref with `out` lifetime must be used linearly
+  can't consume `move` without destroying referree
+  instantiating above fully-polymorphic impl Deref for Box with `out` or `move` would **not** be safe
+    therefore, the definition as provided must be considered illegal? (or not, because uses `unsafe`?)
+  to make it safe&legal, would prob need something like:
+    impl<constraints cs: read>  Deref<cs> for Box { ... }
+  but still not enough: must somehow rule out `move`!
+  (maybe each lifetime should be parameterized over *two* constraints: a "before" and an "after"? 
+    might help reduce proliferation of types of constraints. e.g. instead of `out`, have before: init, after: uninit
+    in this case the `Box` impl could specify that both before & after must be alive, which hopefully should be sufficient)
+could potentially fold unsafe/raw pointers under this umbrella as well
+  `safe` and/or `unsafe` would become further constraints
+  derefing a ref with `unsafe` (or not `safe`?) lifetime would require an `unsafe { }`
+  `mut` would no longer imply `uniq`, and would be separate (to support `*mut`)
+  probably further refinements required to support read-only `*const` vs. usually-immutable `&`
+in expression language, /could/ make `&` operator be polymorphic over constraints, thus inferred from use site
+  but probably don't want to!!
+  functions being usable with different reference types is valuable
+  `&` operator being usable with any concretely-constrained function is not, just hurts readability
+  (would also lead to ambiguity w/ constraint-polymorphic functions, but could just default to "shared")
+
+
 ## MACRO REFORM
  - fully hygienic
  - privacy according to defn site
@@ -243,16 +316,18 @@ moving out permanently prob needs Dealloc/DerefMove like above
      could they alternate? make progress as far as possible, then call back to the other?
      => a topological "traversal"
      with some kind of restriction to rule out cycles
-     is that restriction necessary? analogous to the stage restriction in Template Haskell
+       or could possibly just detect cycles & report them as errors, like w/ name resolution prototype?
+     is the restriction necessary? analogous to the stage restriction in Template Haskell
      but is that only because TH macros are actual Haskell code which must be compiled, unlike macro_rules!?
-     ~ procedural macros
+     i.e. they are procedural macros
      is it avoidable for declarative macros?
         has two parts:
         1. can only use macros imported from a different module (~ different crate requirement for procedural macros in Rust)
         2. top-level splices act as a barrier
 
 
-## REMOVE SUBTYPING
+## REMOVE SUBTYPING?
+  https://github.com/rust-lang/rfcs/pull/192#issuecomment-52168355
   or rather, remove the need for variance inference / annotations?
   TENTATIVE PLAN:
     type parameters are always invariant
@@ -326,12 +401,12 @@ moving out permanently prob needs Dealloc/DerefMove like above
 
 Inferring Safe is wrong (abstract vs. data type distinction)
 https://ghc.haskell.org/trac/ghc/ticket/8827
-http://ezyang.tumblr.com/post/96448232652/safe-zero-cost-coercions-for-haskell-richard
+related http://ezyang.tumblr.com/post/96448232652/safe-zero-cost-coercions-for-haskell-richard
 
 FlexibleInstances can be used to violate coherence!!
 http://www.reddit.com/r/haskell/comments/2agy14/type_classes_confluence_coherence_global/civ6y1g
 TODO port test case to Rust!
-http://blog.ezyang.com/2014/09/open-type-families-are-not-modular/
+related http://blog.ezyang.com/2014/09/open-type-families-are-not-modular/ (ragamuffin instances)
 
 Macro import/export
 https://github.com/mozilla/rust/issues/3114
@@ -367,8 +442,10 @@ Implementation strategies for polymorphism
 http://www.eecs.harvard.edu/~greg/cs256sp2005/lec15.txt
 
 Ericson2314's modules/traits proposal
-https://github.com/Ericson2314/rfcs/blob/master/active/0000-combine-mod-trait.md
-http://ezyang.tumblr.com/post/96605373187/1ml-core-and-modules-as-one-or-f-ing-first-class
+TOREAD https://github.com/Ericson2314/rfcs/blob/master/active/0000-combine-mod-trait.md
+related http://ezyang.tumblr.com/post/96605373187/1ml-core-and-modules-as-one-or-f-ing-first-class
+related http://www.reddit.com/r/haskell/comments/2foggq/why_does_david_turner_say_type_classes_were_a_bad/ckbw3g7 (neelk)
+related http://www.reddit.com/r/haskell/comments/2foggq/why_does_david_turner_say_type_classes_were_a_bad/ckchsx5 (edwardkmett)
 
 TCE
 https://mail.mozilla.org/pipermail/rust-dev/2011-August/000711.html
@@ -376,7 +453,7 @@ https://mail.mozilla.org/pipermail/rust-dev/2011-August/000700.html
 https://mail.mozilla.org/pipermail/rust-dev/2013-April/003557.html
 https://github.com/mozilla/rust/issues/217
 
-Variadic generics / arity polymorphism
+TOREAD Variadic generics / arity polymorphism
 http://www.ccs.neu.edu/racket/pubs/NU-CCIS-08-01.pdf
 http://www.ccs.neu.edu/racket/pubs/NU-CCIS-08-03.pdf
 http://www.ccs.neu.edu/racket/pubs/esop09-sthf.pdf
@@ -387,6 +464,7 @@ http://www.reddit.com/r/haskell/comments/urc75/complicating_conduit/c4xyqiz
 
 edwardkmett on the mistakes of Scala
 http://www.reddit.com/r/haskell/comments/1pjjy5/odersky_the_trouble_with_types_strange_loop_2013/cd3bgcu
+implicit lambdas http://www.reddit.com/r/haskell/comments/2fbe4t/compose_to_avoid_lambdas/ck7vzcs
 
 BitC Lessons For Other Language Developers - Simple vs. Too Simple
 http://www.coyotos.org/pipermail/bitc-dev/2012-May/003469.html
@@ -476,9 +554,31 @@ patterns + enum variants & statics problem:
   there's still the hardline "case should never be significant" position, but if both sides standing on principle (i.e. not much practical difference), correctness is the more important principle
 
 
+## DOM
+> constraints:
+> cheap field access from internal methods;
+  > cheap      = constant offset (fixed prefix layout)
+  > less cheap = offset in vtable
+  > expensive  = virtual method
+> cheap dynamic dispatch of methods;
+  > "cheap"   = current virtual methods
+  > expensive = going through an indirection for each link in the inheritance chain, i.e. a non-flattened tree-like structure
+> cheap downcasting;
+  > cheap     = TypeId in vtable
+  > expensive = going through a virtual method to retrieve a TypeId (or worse)
+> thin pointers;
+> sharing of fields and methods between definitions;
+> safe, i.e., doesn't require a bunch of transmutes or other unsafe code to be usable.
+relevant features:
+  trait Transmute
+  EQT (thin pointers, downcasting (Any/Dynamic w/ associated static TypeId))
+  closed traits (cheap "dynamic dispatch" (not even dynamic), downcasting)
+TODO translate https://gist.github.com/jdm/9900569
+
+
 ## Misc features
  - allow `loop { }` to evaluate to a value by providing it to `break`
-   (`while` and `for`..`in` are harder... what's the value when the loop stops? last evaluated expr in last iteration?)
+   (probably not `while` and `for`... what's the value when the loop stops?)
    related to "early return from any block"
  - allow assigning to return value before exiting function?
    fn foo() -> int {
@@ -590,7 +690,7 @@ fn eval_force<T, F: FnOnce() -> T>(self: &mut Lazy<F, T>) {
 }
 
 fn eval_noop<F, T>(self: &mut Lazy<F, T>) -> &mut T {
-    transmute(&mut self.data)
+    unsafe { transmute(&mut self.data) }
 }
 
 impl Functor, Applicative, Monad, Comonad
@@ -599,6 +699,7 @@ impl Fn{,Mut,Once}?
   return T: unwrap? Copy? Clone?
   return &mut T?
 or impl Deref{,Mut,Move}?
+  could impl `DerefMut`, but not `Deref`?!
 
 
 QUESTION Lazy<F, T> or Lazy<T, F>?
@@ -763,7 +864,6 @@ impl<'s, T, type<type> R>
     Transmute<&'s R<&'s T>> for &'s R<Box<T>> { }
 
 
-
 ## MISC QUESTIONS
 - static stack space analysis + tables-next-to-code?
   put stack space usage at a fixed offset next to fn body
@@ -814,6 +914,30 @@ impl<'s, T, type<type> R>
       only covers the case where Drop is restricted to a trait, not to a type (requires an (~) constraint)
       think this should be a separate feature
 - is there any way to give a safe type signature to `alloca`, with e.g. &out?
+  (obviously needs to be some kind of built-in intrinstic, can't be an actual function)
+  (only makes sense for dynamic things, if you know the type/size at compile time you can just `let`)
+  fn alloca<T>(n: uint) -> &out [T];
+  fn alloca<ref T>() -> &out T;
+  but lifetime needs to be tied to current stack frame somehow...
+  and can _only_ work for the current stack frame/lifetime
+  can't alloca into caller stack frames, and callee stack frames don't even exist
+  so passing in the lifetime as a parameter cannot be part of the solution
+  add a magical lifetime which always refers to the lifetime of the current scope?
+  fn alloca<T>(n: uint) -> &'self out [T];
+  but the `'self` lifetime of the caller isn't in scope at the type sig of `alloca`...
+  maybe trying to write it as a normal fn type signature is a bad idea in the first place,
+    & it should be a built-in operator instead... 
+    like you can't write the type signatures of the `&` and `&mut` operators in the language itself either
+  but then specifying the argument & return without overspecializing becomes the problem
+  surely fixed-length arrays and `ref T` aren't the only meaningful possibilities
+  what's the most general formulation? is there one? 
+    is it actually `ref T`? does the fixed-length array case fit into it?
+  so conceptually: `alloca: ref T -> &'self out T`?
+  should this even be exposed as a separate "thing"?
+  maybe the right thing to do is to just allow using `ref` types in `let`s (which would otherwise be strictly forbidden as not representable),
+    and use alloca under the hood?
+  ...would this actually allow removing all restrictions on use of `ref` types in fn bodies - and thus the need for `ref` itself???
+  does this end up being intensional type analysis at the limit??? wouldn't be surprised...
 - `let x = ...; let y = &move x; x = *y;` seems like it should be OK? saying "actually, don't destroy it after all"
     can this be shown safe in general?
   is there an analogue for `&out`?
@@ -896,6 +1020,30 @@ impl<'s, T, type<type> R>
 
 `Box` is going to become a library type, right?
 
+Option -> Maybe, Optional, Nullable
+
+Some/None -> Yes/No, Full/Empty, Val/Null
+
+enum Maybe<T> {
+    Yes(T),
+    No
+}
+
+enum Maybe<T> {
+    Full(T),
+    Empty
+}
+
+enum Optional<T> {
+    Full(T),
+    Empty
+}
+
+enum Nullable<T> {
+    Val(T),
+    Null
+}
+
 Interesting project: once Rust has `Trace` GC, implement a Haskell compiler/runtime piggybacking off of it?
   Desugar Haskell to Rust?
     every type just becomes Gc<Lazy<T>>?? what about threads?
@@ -929,6 +1077,43 @@ idempotence   <-> reflexivity
 commutativity <-> symmetry
 associativity <-> transitivity
 what's the precise relationship here
+
+https://github.com/idris-lang/Idris-dev/wiki/Copatterns
+    codata Stream : Type -> Type where
+        head : Stream a -> a
+        tail : Stream a -> Stream a
+        constructor (::) head tail
+
+    map : (a -> b) -> Stream a -> Stream b
+    head (map f s) = f (head s)
+    tail (map f s) = map f (tail s)
+
+    nats : Stream Nat
+    head nats = Z
+    tail nats = map S nats
+
+trait Stream<T> {
+    fn head(&Self<T>) -> T;
+    fn tail(&Self<T>) -> &Stream<T>; // or -> Stream<T>?
+}
+
+fn map<A, B>(input: Box<Stream<A>>, f: Box<Fn(A) -> B>) -> Box<Stream<B>> {
+    box Stream {
+        head: f(s.head()),
+        tail: s.tail().map(f)
+    }
+}
+
+enum Nat { Z, S(Nat) } // Box?
+
+fn nats() -> Box<Stream<Nat>> {
+    box Stream {
+        head: Z,
+        tail: nats().map(S)
+    }
+}
+
+also need Lazy to make this actually work... maybe Gc<Lazy<T>> or something everywhere to make it simpler
 
 
 ## No privates in public
@@ -988,7 +1173,7 @@ OK:
  * Macros
 
 Things we do better than Haskell:
- * Distinction between scoping (modules) and compilation units (crates)
+ * Distinction between namespacing (modules) and compilation units (crates)
  * Recursive modules
  * Submodules
  * Declarative macros without stage restriction
@@ -1097,3 +1282,5 @@ http://discuss.rust-lang.org/t/impl-t-copy-copy-for-mut-t/414
 `swap` for `Cell`
 http://discuss.rust-lang.org/t/a-swap-method-for-cell/392
 
+Multiple mutable borrows from `Vec`
+http://www.reddit.com/r/rust/comments/2fj07c/ml_family_workshop_2014_the_rust_language_and/ckbk368

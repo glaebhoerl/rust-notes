@@ -127,11 +127,11 @@ Outside of owning module:
 
  * Constructors of abstract types may not be used at all
 
- * No literals, no FSU, no pattern matching
+ * Means no literals, no FSU, no pattern matching
 
  * Individual `pub` fields of abstract structs only allow for access with dot-notation: `my_abstract_struct.some_field`
 
-Individual `pub` fields on tuple structs are removed 
+Individual `pub` fields of tuple structs are removed from the language
   data tuple struct => all fields public, abstract tuple struct => all fields private
 
 Solves FSU problem, no further action required
@@ -143,7 +143,7 @@ Outside owning module:
 
  * No literals of abstract types 
 
- * Pattern matching is allowed, but _always_ requires a wildcard (even if all individual fields are marked `pub`!)
+ * Pattern matching them is allowed, but _always_ requires a wildcard (even if all individual fields are marked `pub`!)
 
 Individual `pub` fields in abstract tuple structs must all be at the front, before all private ones
 
@@ -165,9 +165,10 @@ Related question of whether `S { a: foo, b: bar, ..other }` should be interprete
 
   * `{ let S { c, d, e, .. } = other; S { a: foo, b: bar, c: c, d: d, e: e } }` (move whole struct B)
 
+(Still need to think through how these would each interact with the rules above.)
 
 
-Not 100% confident there aren't any further problems lurking. Would personally prefer more obvious simpler formulation.
+Not 100% confident there aren't any further problems lurking. Would personally prefer more obvious, simpler formulation.
 
 
 This is the bulk of the RFC. Explain the design in enough detail for somebody familiar
@@ -176,10 +177,9 @@ This should get into specifics and corner-cases, and include examples of how the
 
 
 
-### Optional add-on: `data trait` to allow traits like the built-in traits in libraries
+### Optional add-on: `data trait` to allow moving built-in traits to libraries
 
-empty, non-generic trait
-
+ * a `data trait` is an empty, non-generic trait (for now)
  * automatically derived for all built-in types which don't conceptually require abstraction barriers to implement
    (i.e. which are equivalent to just a big ADT)
    u8..u64, i8..i64, int, uint, bool, char; [T, ..N] and tuples if contained type(s) also satisfy; but *not* &, &mut
@@ -203,7 +203,7 @@ What's the relationship between `data trait` and `unsafe trait`??
 
 Also being able to write `Box<Trait + DataTrait>`, w/o vptr for DataTrait... should this be extended to all empty traits? or just data traits?
 
-Also the thing that incoherence is OK for empty traits: should it be allowed for all empty traits? or permitted explicitly?
+Also the thing that incoherence is OK for empty traits: should it be allowed for all empty traits? or requested explicitly?
 
 So: a number of related capabilities, not clear how they should be organized
 
@@ -218,13 +218,14 @@ So: a number of related capabilities, not clear how they should be organized
 recommendation: maybe behind a feature gate?
 
 Potential more general longer-term solution:
-more general datatype-generics system (~ GHC.Generics)
-impl your trait for primitive/built-in/abstract types
-impl it for anonymous products: tuples, & for anonymous sums (e.g. (A|B|C))
-(what about exponentials i.e. functions?)
-=> then derive it automatically for same-shape named data types via Transmute
-and derive it explicitly for abstract types (again via Transmute)
-something along these lines, right formulation not 100% obvious
+more general datatype-generics system (~ GHC.Generics):
+  impl your trait for primitive/built-in/abstract types
+  impl it for anonymous products: tuples
+  impl it for anonymous sums, e.g. (A|B|C)
+  (what about exponentials i.e. functions?)
+=> gets derived automatically for same-shape named/non-anonymous/user-defined data types, via Transmute
+and derivable explicitly for abstract types (again via Transmute)
+something along these lines, best formulation not 100% obvious
 
 
 ### Optional add-on: closed traits
@@ -318,6 +319,8 @@ whether to add `data trait`
 
 whether to add closed traits (what to call them)
 
+...if we do this, could/should "`impl Drop` disables `Copy`" rule be removed, or turned into a lint? (`Drop` impl for `Copy`able type)
+(in general, not clear when you would want `Drop` for data types, except debugging/logging)
 
 
 What parts of the design are still TBD?

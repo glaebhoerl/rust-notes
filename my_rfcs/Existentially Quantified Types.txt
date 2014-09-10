@@ -7,16 +7,18 @@ Paper: "First-class polymorphism with existential types" (Daan Leijen)
 # Summary
 
 TODO
-very strong suspicion that DST and EQT are just two ways of talking about the same thing
-and that DST is just less clear about it & leads to confused thinking
+deeply concerned that DST and EQT are just two ways of talking about the same thing
+and that DST is just less precise & leads to confused thinking (accidental complexity)
 most things have correspondences between one and the other
 (but not /exactly/ the same: e.g. EQT puts evidence 'outside', not 'inside' structs)
 EQT feels much much much more 'right'
 concerned we might be doing things under the DST framework which are problematic or have far-reaching consequences, and considered under EQT, would be more apparently so; conversely, things which are weird/strange or flummoxing under DST would be much clearer under EQT
 (e.g. with multiply-existentially-quantified things, "unboxed unsized types", ...)
-Like, maybe we are already doing some kind of scary impredicative types but the DST language is obscuring it from us, notably with e.g. `impl Foo for [T]`
-every time you think, "how does this interact with unsized types", you should be thinking in terms of EQT instead
+like, maybe we are already doing some kind of scary impredicative types but the language of DST is obscuring it from us (e.g. `impl Foo for [T]`...)
+every time you think, "wait, how does this interact with unsized types", you should have been thinking in terms of EQT instead
 (e.g. "can you pass unsized types by-value?" this is like "how many angels can dance on the head of a pin")
+(unsized types should not be a separate "thing" - DST is "leaky" and infects things it should not)
+solves almost every major problem/annoyance with trait objects/strings/DST in the current language. like killing 20 birds with one big stone (is there a less violent phrasing? I like birds)
 
 see newer notes at bottom (scratchpad)
 
@@ -311,7 +313,15 @@ struct str<static N: uint> { contents: [u8, ..N] }
 box "12345": Box<str<5>> (repr = box)
 box "12345": Box<str> (repr = box + length)
 
-### Solves Any-casting problem: (rename Any => Dynamic)
+use `Box<str>` instead of `String` in common APIs
+`box "my string"` much less gnarly than `"my_string".to_string()`
+
+
+(can we formulate Vec/String using E.Q. somehow? would definitively solve as_string/to_string issue...
+eddyb was talking about some `Growable`, then connection timed out)
+
+
+### Solves Any-casting problem: (also rename Any => Dynamic)
 can cast not just built-in refs and Box, but any kind of context (smart pointer, ...)
 unsafe trait Dynamic {
     static TYPE_ID: TypeId;
@@ -382,6 +392,9 @@ based on MLF? or QML, HML, HMF?
 ### Paper: "First-class polymorphism with existential types" (MLF)
   this is perfect!! implicit unpacking of existentials when passing to polymorphic functions is *exactly* what we were looking for!
     i.e. this is calling generic fns bounded on a trait with trait objects of that trait
+  "existentials introduced with type annotations" exactly what we currently do (fn sig, not on existential itself)
+    would imply that explicit trait object "casts" should also simply happen with `:` (type ascription), not `as`
+    ties into broader question of what exactly `as` is for other than casts between primitive numeric types...
   `ref` means: can be instantiated with type variables??
     as opposed to with monomorphic types?? (what is the precise distinction? top-level vs. local??)
     is this connected to `some`, and/or the same as the tau vs. sigma distinction?
@@ -431,6 +444,8 @@ based on MLF? or QML, HML, HMF?
     `Vec<&bool>` to `Vec<&?>` would theoretically be OK
     so would `Vec<&Copy>`, e.g.
     but should we take this into consideration, or is it simpler to forbid it uniformly?
+    is this any more conceptually complicated than just replacing the parts responsible for this stuff with `unimplemented!()`?
+    (a bottom fulfills any obligation...)
 
 borrow Daan Leijen from MSR to work on Rust! :o)
 
@@ -499,7 +514,7 @@ think this works out fine
 
 EQT would also solve trait objects + Clone issue!
 https://github.com/rust-lang/meeting-minutes/blob/master/workweek-2014-08-18/library-experience-report.md
-(same as Iterator example in text, should probably use this example instead)
+(same as Iterator example in text... should probably use this example instead)
 
 
 ### Interaction with associated types
@@ -524,9 +539,6 @@ let y = box obj.func(); // ok
 let z: Box<OtherTrait> = box obj.func(); 
 // this is legal!! :)
 
-
-can we formulate Vec/String using E.Q. somehow? would definitively solve as_string/to_string issue...
-eddyb was talking about some `Growable`, then connection timed out
 
 
 
