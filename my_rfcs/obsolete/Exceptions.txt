@@ -533,7 +533,7 @@ try { foo()?.bar() } catch e { match e { A(e) => baz(e), B(e) => quux(e) } }
 
 fn foo(A) -> B throws C { CODE }
 =>
-fn foo<Car: Carrier<Normal=B, Exception=C>>(A) -> Car { try { CODE } }
+fn foo<Car: Carrier<Normal=B, Exception=C>>(A) -> Car { 'fn: try { CODE } }
 this accomplishes two things:
   `foo` is polymorphic over carrier type
   gets rid of syntactic overhead for "normal" case, e.g. CODE can be just `make_b()` instead of `Ok(make_b())`

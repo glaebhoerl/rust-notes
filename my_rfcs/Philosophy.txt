@@ -16,3 +16,11 @@
 - do not sacrifice long-term language quality for an earlier release
 - do aggressively limit the scope of what will be in the release
 - when in doubt, choose the forwards compatible option
+
+The road to better design is [only?] through better understanding.
+
+"Those who would give up essential Invariants, to purchase a little temporary Convenience, deserve neither Invariants nor Convenience." --Ben Franklin
+
+"" --Abraham Lincoln
+
+"Ask not what you can do for invariants; ask what invariants can do for you." --JFK

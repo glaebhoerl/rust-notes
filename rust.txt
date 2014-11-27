@@ -4,29 +4,24 @@ Ban private items in public APIs
 Turn capitalization conventions into language rules for 1.0
 Change `extern "ABI"` to `extern<ABI>` or `extern ABI`
 Use `for` to introduce universal quantification
+Trait-based exception handling
+Rename `Option`, add `Assert` trait
+Represent equivalent enums the same as bool, make bool an enum
+Allow #attr and #attr(foo) but still require #[attr = foo]
 
 NEXT UP
-Further privacy reform
-Existentially Quantified Types
+Distinguish data types from abstract types
 Deconflate types and modules
+`extern mod`
 Purity
-Exceptions
-Allow #attr and #attr(foo) but still require #[attr = foo]
 foo::<T>() -> foo@<T>()
-Inline modules use normal scoping
+Lifetime syntax (lose the tick)
+DST reform (EQT)
 
 trait Transmute
 Garbage collection (trait Trace)
 &out
 &move
-
-DISCOURSE?
-`box`
-Deterministic name resolution
-Macro reform
-Intrusive datastructures, unmovable types
-Linear types
-Philosophy
 
 # RFCs
   # CRITICAL
@@ -36,7 +31,7 @@ Philosophy
       * ...
     * Purity for (almost) free (FIGURED OUT)
     * Deconflate types and modules, UFCS, UMCS, ... (FIGURED OUT)
-    * Closed structs, enums, traits (`abstract struct`, `data struct`, `class`, whatever) (IN PROGRESS)
+    * Distinguish data types from abstract types (`abstract struct`, `data struct`, `class`, whatever) (IN PROGRESS)
     * Deterministic name resolution (AKA "No guessing")
     * Closure reform (SUBMITTED BY nikomatsakis)
   # BIC
@@ -44,12 +39,10 @@ Philosophy
       Distinguish inline (in-file) vs. external (separate file) modules
       Items of (in-same-file) parent modules are in scope for inline mods, `use` uses relative paths. Like C++.
       inline mods: `mod foo { ... }`, out-of-line mods declared: `extern mod foo;` (but bikeshed)
-      QUESTION require :: to refer to crate root in `use`? is the crate root in scope everywhere by default?
-      crate { lib.rs: mod parent { extern mod foo; } foo.rs: { ...BODY... } }
-      => crate { mod parent { use foo; ... } mod foo { use super = parent; ... BODY ... }
+      http://www.reddit.com/r/rust/comments/2he9xi/rusts_modules_are_weird_another_explanation_of/cks4cch
     ? Remove subtyping and variances (only sublifetimes, but not sub*type*s?)
     ? Automatic coercions reform (`as` reform?)
-    * Linear types
+    ? Linear types
       Unwinding? Require explicit `Drop` bounds?
     * Parametricity
       * QUESTION: how to reconcile with trait SizeOf<T> { static N: uint } forall types?
@@ -77,7 +70,7 @@ Philosophy
         &'a Foo         -> &(a) Foo or &{a} Foo (braces are suggestive of scopes)
   # IMPORTANT
     * "Mutability polymorphism"
-    * Exception handling a la Either monad (FIGURED OUT)
+    * Trait-based exception handling (SUBMITTED)
     * trait Trait1 + Trait2 (PARTIALLY IMPLEMENTED)
     * trait Transmute<T> (SUBMITTED BY gereeter)
     * GC, trait Trace
@@ -116,11 +109,6 @@ Philosophy
               show: num.to_str()
           };
         self is implicit?! like fn closures
-        see `BiOnceFn` in Exceptions for compelling use case!
-          let my_bi_fn = box BiOnceFn {
-              call1(n): num + n,
-              call2(m): num * m
-          };
     * for<T1..TN> { ..items.. } (SUBMITTED BY ben0x539, POSTPONED)
     * Naming wibbles:
         macro_rules! -> macro!, define!
@@ -133,6 +121,7 @@ Philosophy
         int, uint    -> isize, usize
         char         -> Char (no need to confuse w/ C char)
         Iterator     -> Iterate? (or maybe Iterable -> Iterate)
+        unsafe       -> dangerous? (same meaning, stronger)
   # FAR FUTURE
     * `static` generics parameters
     * Generic generics parameters (HKT)
@@ -156,6 +145,13 @@ Philosophy
  * What's the conflict between modules and macros?
  * Why isn't a simple newtype-based design sufficient for HashMap?
  * Is `Arrow` connected to linear logic/types? (To closed (symmetric) monoidal categories?)
+   * linear types correspond in some way to indexed monads (session types)
+   * categories are indexed monoids (arrows extend categories)
+   * a monoid is kind of like a monad without the typaram (Monad m => Monoid (m ()))
+   * Monads hide the state and only expose state transformers
+   * GHC's IO + ST monad uses linear capability passing behind the scenes, but can't enforce the linearity, hence IO is abstract
+   * Arrowized FRP hides the signals and only exposes signal transformers
+   * => With linear types, could we safely expose the signals?
  * Is there a relationship between traits and copatterns/codata? https://github.com/idris-lang/Idris-dev/wiki/Copatterns
  * Is there a description/paper about UHC's implementation of existential types?
  * How can safety of (multiply-)intrusive data structures be proved / reasoned about in general?
@@ -163,8 +159,8 @@ Philosophy
    => What are path dependent types?
    Same thing as this? http://stackoverflow.com/questions/2693067/what-is-meant-by-scalas-path-dependent-types
    Where do they occur in Rust? (Something to do with trait objects?)
- * Is it possible that we might want bidirectional type inference instead of HM?
-   The biggest "drawback" usually cited for BiDiTI is that it requires type signatures on top-level definitions.
+ * Is it possible that we might want bidirectional typechecking/inference instead of HM?
+   The biggest "drawback" usually cited for BiDiTC is that it requires type signatures on top-level definitions.
    But we already require that!
 
 
@@ -187,66 +183,6 @@ Specific features:
 Likewise for standard library... if we want to add everything that might impact std before 1.0, we're going to end up adding /every/ major feature before 1.0.
 If a feature didn't have an impact on libraries, it wouldn't be major.
 Only real solution is to version stdlib.
-
-
-
-## How `box` should work
-
-// should prob be called something different if we're going to have a separate trait for allocators
-// but maybe that should be called RawAlloc or w/e
-trait Alloc {
-    type Where = ();
-    fn alloc<T>(self: &out Self<T>, where: Where) -> &out T; // HKT
-}
-
-impl Alloc for Box { ... }
-impl Alloc for Rc  { ... }
-impl Alloc for Gc  { ... }
-
-struct Arena { ... }
-struct ArenaRef<'s, T> { ... }
-
-impl<'s> Alloc for ArenaRef<'s, ..> { // partial type application
-    type Where = &'s mut Arena;
-    ...
-}
-
-`box(where) some_foo` =>
- * type determined by inference
- * type is `B<Foo>` such that: `some_foo: Foo` && `where: Where` && `B: Alloc` && `B::Where = Where`
- * `box some_foo` short for `box(()) some_foo`
- * `B` defaults to `Box`?
- * use type ascription to fix `B` when necessary, e.g. `let rc_foo: Rc<_> = box some_foo;`, or later `box some_foo: Rc<_>`
-   HKT is important so the element type can be inferred with _, while outer type is specified; otherwise, have to specify whole type!
-   (question: precedence of `:`?)
-
-
-some_foo: Foo
-where: Where
---
-box(where) some_foo: forall B: Alloc where B::Where = Where. B<Foo>
-
-box(where) some_foo
-=>
-{
-    let the_box;
-    *the_box.alloc(where) = some_foo;
-    the_box
-}
-
-box some_foo
-=>
-box(()) some_foo
-
-??
-trait Dealloc {
-    fn dealloc<T>(self: Self<T>, move_to: &out T);
-}
-connection to Drop??
-is this the same thing as DerefMove?
-
-can _temporarily_ move out of smart pointers with DerefMut by general mechanism of moving out of &mut, leaving an &out
-moving out permanently prob needs Dealloc/DerefMove like above
 
 
 ## MUTABILITY POLYMORPHISM
@@ -295,7 +231,7 @@ can expand the set of constraints to "add more reference types", with repercussi
     in this case the `Box` impl could specify that both before & after must be alive, which hopefully should be sufficient)
 could potentially fold unsafe/raw pointers under this umbrella as well
   `safe` and/or `unsafe` would become further constraints
-  derefing a ref with `unsafe` (or not `safe`?) lifetime would require an `unsafe { }`
+  derefing a ref with `unsafe` (or without `safe`?) lifetime would require an `unsafe { }`
   `mut` would no longer imply `uniq`, and would be separate (to support `*mut`)
   probably further refinements required to support read-only `*const` vs. usually-immutable `&`
 in expression language, /could/ make `&` operator be polymorphic over constraints, thus inferred from use site
@@ -303,27 +239,6 @@ in expression language, /could/ make `&` operator be polymorphic over constraint
   functions being usable with different reference types is valuable
   `&` operator being usable with any concretely-constrained function is not, just hurts readability
   (would also lead to ambiguity w/ constraint-polymorphic functions, but could just default to "shared")
-
-
-## MACRO REFORM
- - fully hygienic
- - privacy according to defn site
- - _all_ name resolution in macro bodies should happen at definition site! (syntactic closure)
-   => hygiene falls out as a consequence
- - namespaced like other items
-     hard because macro expansion happens before name resolution
-     doing them together is allegedly very difficult
-     could they alternate? make progress as far as possible, then call back to the other?
-     => a topological "traversal"
-     with some kind of restriction to rule out cycles
-       or could possibly just detect cycles & report them as errors, like w/ name resolution prototype?
-     is the restriction necessary? analogous to the stage restriction in Template Haskell
-     but is that only because TH macros are actual Haskell code which must be compiled, unlike macro_rules!?
-     i.e. they are procedural macros
-     is it avoidable for declarative macros?
-        has two parts:
-        1. can only use macros imported from a different module (~ different crate requirement for procedural macros in Rust)
-        2. top-level splices act as a barrier
 
 
 ## REMOVE SUBTYPING?
@@ -395,6 +310,7 @@ in expression language, /could/ make `&` operator be polymorphic over constraint
  can this be done entirely as a library?? (except for the auto-deriving and the more-magical built-in impls..?)
  impl<T> HasPrefix<()> for T
  impl<T> HasPrefix<T> for Void // or even Transmute?
+ HasPrefix -> Extends?
 
 
 ## LINKS
@@ -479,6 +395,9 @@ http://hackage.haskell.org/package/control-monad-exception
 http://www.jot.fm/issues/issue_2011_01/article1.pdf
 http://erdani.com/publications/cuj-2003-12.pdf
 
+Linear types, regions, capabilities
+http://pauillac.inria.fr/~fpottier/slides/fpottier-2007-05-linear-bestiary.pdf
+
 Existential types
 TODO add papers
 
@@ -510,6 +429,15 @@ is this related to arena allocation?
   but maybe that's handled by having `&` references into them?
   but then they're not `Send`, which is the point?
 generic functions?? :(
+use case: http://www.reddit.com/r/rust/comments/2gwi11/jonathan_blow_ideas_about_a_new_programming/cknhxyb
+  how could we express this safely in Rust?
+    struct Mesh<static N: uint, static M: uint> {
+        N, M,
+        verts: &'self mut [Vector3, ..N],
+        indices: &'self mut [uint, ..M],
+        verts_data: [Vector3, ..N],
+        indices_data: [uint, ..M]
+    }
 
 
 ## &out, &move
@@ -577,8 +505,28 @@ TODO translate https://gist.github.com/jdm/9900569
 
 
 ## Misc features
+ - lint: warn if a lowercase name in a pattern resolves to a variant/const, or if an uppercase one becomes a new binding
+ - `struct std::float { val: f32 }` where the ops are all implemented to go through f64?
+   (`half` where ops are via `f32` could be similarly)
+ - `let loop` for recursive let?
+ - fn literals
+ - "trait objects for traits that never refer to Self could just be a pointer to vtable" (Ericson2314)
+   but the associated fns, etc. are still associated to the type
+   they just don't use a value of it at runtime
+   (conflict w/ implicit Drop, Trace?)
+   can we reformulate `fn` as a trait object this way?
+ - potential new operators:
+   ++/<>: semigroup op
+   <=>: Ord compare
+   ^, ^^, **: exponentiation
+   function composition?
+   logical implication? (equiv. to !B || A)
+ - should be able to dyncast slices (types existentially-quantified-over-length) to fixed-length arrays slices
+   where result slice length is *at most*, not *exactly* actual length (except for &out, &move...)
+   then index elements statically
+   (should this be integrated with pattern matching?)
  - allow `loop { }` to evaluate to a value by providing it to `break`
-   (probably not `while` and `for`... what's the value when the loop stops?)
+   `for`..`in`, `while`: have an `else` block
    related to "early return from any block"
  - allow assigning to return value before exiting function?
    fn foo() -> int {
@@ -618,6 +566,7 @@ TODO translate https://gist.github.com/jdm/9900569
    could also take advantage of tag bits in pointers, i31, ... go crazy
    would not supplant manual bit twiddling if a _specific_ representation is required, e.g. for hardware interaction
    (but maybe allow specifying explicitly in #repr args?! would need to be pretty sophisticated...)
+   http://nikic.github.io/2012/02/02/Pointer-magic-for-efficient-dynamic-value-representations.html
  - allow type inference of locally declared fns and statics?
  - deriving Functor, Contrafunctor, Bifunctor, Profunctor, .. ?
  - all built-in types just sugar for lang items
@@ -795,7 +744,7 @@ trait ComposeWithIdentity<Cat: Compose> { // ??
 // Group? Groupoid?
 
 // Functor
-trait Map<F> { // abstract over fn type?? e.g. `Option` would like `FnOnce`
+trait Map<F> { // Collect? // abstract over fn type?? e.g. `Option` would like `FnOnce`
     fn map<A, B>(a: F<A>, f: &Fn(A) -> B) -> F<B>;
 }
 // additional reason to avoid `Functor` name: different meaning in C++ & others
@@ -862,6 +811,10 @@ impl Transmute<SkolemA> for SkolemB { }
 impl<'s, T, type<type> R>
     where R<SkolemB>: Transmute<R<SkolemA>>
     Transmute<&'s R<&'s T>> for &'s R<Box<T>> { }
+
+impl<'s, T, U: BorrowExtend<'s, T>, type<type> R>
+    where R<SkolemB>: Transmute<R<SkolemA>>
+    Transmute<&'s R<U>> for &'s R<T> { }
 
 
 ## MISC QUESTIONS
@@ -1014,6 +967,128 @@ impl<'s, T, type<type> R>
 - are enums just existentially quantified somethings? (yes)
 
 
+## "Interesting projects"
+
+### Once Rust has `Trace` GC, implement a Haskell compiler/runtime piggybacking off of it?
+Desugar Haskell to Rust?
+  every type just becomes Gc<Lazy<T>>?? what about threads?
+  what about currying?
+Merely Haskell-like syntax for Rust, keeping Rust semantics?
+
+### Mechanically translate C to Rust with *const T, *mut T, `unsafe`
+problematic bits:
+  goto
+  switch with fallthrough?
+next step: determine where * can safely be replaced with &... what other obvious things?
+
+### Mechanically translate Rust to C
+is there any point to this, given Rust has a C FFI?
+wider portability
+
+### C++ ABI compabitibility for Rust?
+(only two major C++ ABIs: Itanium + MSVC)
+modules <=> namespaces
+built-in Rust types <=> C++ equivalents?
+static polymorphism <=> templates
+dynamic polymorphism <=> vtables, or structs-of-function-pointers
+ADTs <=> tag-enum-plus-union, tagged_union<...>?
+
+### a Rust-inspired typechecker plugin / semantic analysis for C++? i.e. a semantic "Safe C++" subset
+make use of Rustic typesystem and "convention over configuration"-based inference for provably safe C++ code
+any Safe C++ program is also a legal C++ program; reverse is not true
+  ideally also: compiles to the same code, i.e. safe no matter what it is compiled with
+  i.e. doesn't depend on automatically inserted runtime checks or similar, wholly compile-time
+i.e. Safe C++ is a strict (semantic) subset of C++
+any program accepted as Safe C++ is provably free of type/memory safety violations and UB, except where explicitly annotated otherwise
+(other forms of correctness, e.g. nullability, "trait coherence", principal types, separate typechecking of generics, ... are most likely out of scope)
+(expressiveness, elegance, convenience, performance ... are also not improved)
+  complementary w/ Yt lib for these other aspects?
+  cooperation with Yt: Yt has runtime checks, but can safely be disabled given Safe C++ static checks?
+  define SAFE_CPLUSPLUS?
+three "layers":
+ 1. attempt to infer as much currently existing actually-safe C++ code as possible as safe (might be feasible for only a limited amount of code)
+ 2. where 1. fails, make it possible to straightforwardly reformulate code such that it /can/ be inferred as safe
+ 3. where 2. is impossible, make use of explicit safe/unsafe boundaries (ala Rust `unsafe`)
+ratio of safe-to-unsafe code will in all likelihood not be as good as Rust, but still a massive improvement over existing C++ where essentially 0% of code is safe
+particular techniques:
+ - types are propositions, etc. (assume provided values are valid; forbid constructing invalid values)
+ - unsafe code is tasked w/ upholding usual C++ invariants (!UB), *and* Safe C++ invariants!
+ - lifetime inference/elision for pointers and references
+   - just like in Rust, incl. special handling of `this`
+   - what corresponds to Rust's unsafe pointers? (actual C++ pointers, and only references are safe? a special unsafe pointer type?)
+     - as opposed to Rust, an "unsafe block" just means "lift all static checks", rather than "permit invoking unsafe operations"?
+     - i.e. normal pointers are both safe pointers outside "unsafe blocks", and unsafe pointers inside them
+     - unlike Rust we don't optimize based on the invariants we are enforcing, so this should be OK
+     - this doesn't really work? have a ptr field in a struct, which should be unsafe; should forbid accessing it from safe code
+     - use either `unsafe` in name or attribute to track this, & require all variables it is copied to to also have the annotation?
+     - how can we say that a function returns an unsafe pointer? :/
+ - reinterpret `const` to mean deeply immutable
+   - what's `Cell`? can we have "impl<T: Copy> Copy for &mut T"?
+   - `const` in C++ is attached to the type, but maybe this is not a problem? (same cases exist as in Rust, + more, but don't care about those)
+ - CFG for function bodies to track initialization states etc.
+ - pointers are assumed to be nullable, references non-nullable
+   - have a special analysis based on CFG for nullity of pointers: allow deref ptr inside if (ptr) { } block
+   - to require/assume an argument non-null, use references
+   - for non-null ptrs/refs in containers, make a `Ref` type
+ - assume+require bools and enums only contain listed values
+ - affine types: after invoking move constructor, further use of variable (before reinitialization) is an error
+   - (how can we make sure copy/move constructors are safe? do we need any special handling here beyond usual safe/unsafe split?)
+   - static drops or dynamic drops? (existing C++ destructors /should/ already impl dynamic drops...) (maybe an annotation?)
+   - a type is affine if: it has a non-trivial destructor? move constructor?
+   - mutable pointers/references are affine (likely to be painful? lots of stuff needs to become `const`... but most references already are)
+ - do all analysis /after/ template expansion and overloading have been resolved!! (just like existing C++ checks!)
+   - this should let us sidestep /all/ of the craziness around overloading and templates!
+   - from our perspective, templates and overloading do not exist
+   - work w/ the language, not against it
+ - annotations via comments, attributes, and/or naming conventions
+   - e.g. an `unsafe fn` is any function whose name begins with "unsafe"?
+   - also for lifetimes? etc.
+   - must have the approach that default inference is always most conservative, annotations required for greater liberalness?
+   - are annotations sufficient, or do we need actual types?
+ - HOFs: polymorphic over safety?
+   - i.e. if you have an fn pointer as argument (you are a HOF), you may call it
+   - but safe fns which call the HOF may only pass safe functions as arguments
+   - virtual functions: require annotating the virtual fn decl with its safety! (default: safe), & overrides must obey the contract
+   - likewise fn pointer members of structs
+     - do safe/unsafe fn pointers need to be different types?? :(
+     - to avoid the information being lost...
+     - use either `unsafe` in name or an attribute to track this, & require all variables it is copied to to also have the annotation?
+       - is this a sufficient condition??
+       - are e.g. names/attributes of fn args something we can know about?
+ - if necessary:
+    - distribute own (header-only) library w/ custom "lang item" types which are known to the Safe C++ typechecker w/ magical properties
+      - magical properties, or just the same annotations as elsewhere?
+      - Ref<T>, MutRef<T>, Out<T>, ...
+    - have own, compatible stdlib implementation w/ runtime checks; programs safe as long as it uses this `std`?
+    - have wired-in knowledge of properties of things in stdlib? (is this possible in general, across different stdlib implementations?)
+technical difficulties:
+ - signed integer overflow UB
+   - is it possible to make a wrapping-overflow integer type by casting to uint -> perform op -> cast back? (should be?)
+ - division, shifts UB
+   - same as above?
+ - what other UB?
+ - evaluation order?
+   - can use CFG to forbid undefined orders?
+ - strict aliasing? (i.e. type-based aliasing)
+   - safe code restrictions should rule it out anyways, & in unsafe code it's not our concern?
+ - exception safety?
+   - just make *catching* exceptions unsafe, like Rust task failure? but what about interaction w/ unsafe code? (not our concern?)
+ - subtyping?
+ - lifetimes of temporaries?
+ - how can we know whether user-defined types are nullable? should we?
+ - how can we handle structs which /should/ have lifetime parameters?
+ - how can we tell when a lifetime was intended to be 'static?
+practical difficulties:
+ - interoperation with existing code & libraries
+ - which parts are safe & which unsafe?
+ - chicken & egg problem: libraries unwilling to add Safe C++ support unless it is popular; Safe C++ popularity depends on library support
+see also: 
+ - http://homes.cs.washington.edu/~asampson/blog/quala.html
+ - https://developer.chrome.com/native-client/reference/pnacl-undefined-behavior
+ - 2*3 regehr.org & clang UB series
+ - FAQ, FQA...
+
+ 
 ## Misc 
 
 `Result` should have its type arguments flipped if it wants to be a Functor.
@@ -1044,21 +1119,21 @@ enum Nullable<T> {
     Null
 }
 
-Interesting project: once Rust has `Trace` GC, implement a Haskell compiler/runtime piggybacking off of it?
-  Desugar Haskell to Rust?
-    every type just becomes Gc<Lazy<T>>?? what about threads?
-    what about currying?
-  Merely Haskell-like syntax for Rust, keeping Rust semantics?
+enum BorrowOrBox<'a, T> {
+    Borrow(&'a T),
+    Box(Box<T>)
+}
 
-Interesting project: mechanically translate C to Rust with *const T, *mut T, `unsafe`
-  problematic bits:
-    goto
-    switch with fallthrough?
-  next step: determine where * can safely be replaced with &... what other obvious things?
+types you can use a statically fixed number of times (linear types = once, Rc = unbounded):
 
-Interesting project? mechanically translate Rust to C
-  is there any point to this, given Rust has a C FFI?
+    enum Z;
+    enum S<T>;
 
+    struct Foo<N> { ... }
+
+    fn do_thing_with<N>(foo: Foo<S<N>>) -> Foo<N>;
+
+    fn do_last_thing_with(foo: Foo<Z>);
 
 vReplicate :: (PI n :: Nat) -> x -> Vec n x
 vReplicate Z     x = VNil
@@ -1114,6 +1189,9 @@ fn nats() -> Box<Stream<Nat>> {
 }
 
 also need Lazy to make this actually work... maybe Gc<Lazy<T>> or something everywhere to make it simpler
+
+while let i@1..10 = i + 1 {
+}
 
 
 ## No privates in public
@@ -1284,3 +1362,13 @@ http://discuss.rust-lang.org/t/a-swap-method-for-cell/392
 
 Multiple mutable borrows from `Vec`
 http://www.reddit.com/r/rust/comments/2fj07c/ml_family_workshop_2014_the_rust_language_and/ckbk368
+
+On whether to have a type called `int`
+http://discuss.rust-lang.org/t/if-int-has-the-wrong-size/454/18?u=glaebhoerl
+
+How `box` should work
+https://github.com/rust-lang/rfcs/issues/413
+
+Rust vs. C+Haskell
+http://www.reddit.com/r/rust/comments/2ll2of/c_and_haskell/clvsanj
+

@@ -1,0 +1,309 @@
+- Start Date: 2014-07-17
+- RFC PR #: (leave this empty)
+- Rust Issue #: (leave this empty)
+
+
+# Summary
+
+Make a distinction in the language between types which are "just data" (such as `Option`, `Ordering`, and `Point`) and types which represent abstraction boundaries (such as `Box`, `Cell`, and `HashMap`). The built-in traits are automatically propagated over "just data" types, and need to be explicitly re-asserted at abstraction boundaries. Doing so improves abstraction, modularity, safety, *and* convenience, and resolves a soundness violation in the current language.
+
+Potentially also: 
+
+ * Generalize the mechanism for the current built-in traits, enabling them to be implemented in library code.
+
+ * Following the same model as abstract types, add "closed traits" with private-by-default methods. (These have unexpectedly staggering potential.)
+
+
+# Motivation
+
+Rust is currently facing an issue where convenience and correctness are seemingly at odds: if the built-in traits (`Copy`, `Send`, `Sync`) are automatically derived for types based on their contents, then types which use private fields and `unsafe` code behind the scenes become unsafe by default; while if they need to be derived or `impl`ed explicitly, then simple data types like `struct Point { x: int, y: int }` become laborious to "fully declare", whereas one would like them to "just work". There have beensuggestions to distinguish between types which have `priv` fields and ones which don't, but it seems surprising that adding or removing a `priv` field would affect the behavior of the type in such a way.
+
+Rust is not the only language which has encountered this problem: recently, Haskell also has. The issue in Haskell's case is quite similar, and arose after they, like us, added a built-in, automatically derived trait. In their case, this was the `Coercible` type class (which served as the basis for the similarly-named proposal for Rust). In Haskell's case, the dilemma was about having to declare the roles of type parameters. If a type parameter has a representational role, it can be `coerce`d (transmuted) to a different type with the same representation (e.g. a `newtype`). Type parameters with a nominal role, however, cannot. If the default is for type parameters to be representational, then this means, for instance, that types like `Map k v` and `Set k` can be transmuted to different key types with different `Ord` instances, breaking their internal invariants, unless the library author adds explicit nominal role annotations to prevent this. On the other hand, if nominal is the default, then every "plain old" generic datatype would need representational role annotations to become useful with `Coercible`, which they usually want to be, and this would be quite burdensome. There were some suggestions to make the default depend on whether the type's constructors are exported from the module, but this was considered to be inappropriate, because role annotations live at the type system level, while exports and imports are a more primitive, module (name resolution) level mechanism. [This discussion from the GHC bug tracker](https://ghc.haskell.org/trac/ghc/ticket/8827) is worth reading in full.
+
+In each case, the problem is that the language has no notion of abstraction boundaries at the semantic level, and only provides the programmer with the primitive mechanism of selectively exporting names from a module for maintaining internal invariants. However, the programmer *knows* whether she intends a type to be "just data" or to represent an abstraction boundary: she just has no good way to express this to the compiler.
+
+The solution is therefore straightforward: Add a way!
+
+
+## Benefits of this proposal
+
+ * Adding or removing private fields cannot have an effect on client code. Modules which can't see private fields also cannot (barring intentional subversion with `unsafe`) indirectly observe or depend on their presence or absence.
+
+ * Safety and correctness are "the default", and are not opt-in. Abstract types have only those capabilities which they explicitly choose to expose.
+ 
+ * The subversion of abstraction, and therefore safety, by functional struct updates is resolved.
+
+ * Creating types which are "just data" (such as the usual `struct Point`) is straightforward and convenient, and they work like you expect, without having to decorate them with annotations like a Christmas tree.
+ 
+ * In practice, the vast majority of `struct`s' fields are either all public or all private. The language follows the same assumption. Individually specified `pub` fields are still possible, but should rarely be necessary.
+ 
+ * Dummy private fields, for instance in abstract zero-sized types, are no longer necessary.
+ 
+ * Like everything else, `enum` variants may also become private by default.
+ 
+Note also that the exact same problem which Haskell has with `Coercible` will also recur for us when we add `Transmute`/`Coercible`/`Cast` if we don't do this. With this proposal, we could implement `Transmute` almost entirely as a library, with special support from the compiler only for automatically deriving it for data types. (This constrasts to Haskell where they must have role annotations and dedicated logic in the compiler for resolving `Coercible` constraints due to their lack of distinction between data types and abstract types.)
+
+
+## The functional struct update problem
+
+    let v = vec![box 666];
+    Vec { ..v };
+    println!("{}", v.get(0)); // boom
+
+Either the second or the third line should be rejected. What happens instead is that on the second line, we construct a new `Vec` based on the fields of the existing `v` (a functional struct update); and as it happens, those fields are all `*` pointers which implement `Copy`, therefore they are not consumed and `v` itself remains accessible afterwards. The newly constructed temporary `Vec` is immediately dropped and frees its contents, which are shared with `v`. Now we have a `Vec` in an invalid state, and we can blow up the world.
+
+The reason this goes wrong is that we are able to indirectly gain access to the fields of `Vec` and use the fact that they implement `Copy`, even though they are supposed to be private. So we say that "abstraction has been subverted", but this is not quite right, because there was never any serious attempt to ensure it. We have a system for selectively exporting names from a module and a patchwork of ad-hoc mechanisms for authors to try to ensure the abstraction of their module with. But abstraction is a semantic property and deserves to be upheld semantically. Indeed, this problem was discovered when the author got to wondering, given the current unfocused system, what holes one might expect to find; thought of this 
+
+
+# Detailed design
+
+The core idea is simply to use different syntax to declare data types and abstract types, which then have different properties.
+
+While the core of the proposal is the same, there is more than one possible variation on both syntax and semantics. All of them accomplish our core objectives, and the author would be satisfied with any of them. However, others may have strong preferences, so rather than arbitrarily choose one or the other, each option will be presented on equal terms, and the choice may be considered a free parameter of this proposal.
+
+## Variations on syntax
+
+There are three main possibilities for formulating the syntax, which are summarized in the table below. The first column has the informal names of the concepts, while the remaining three have the corresponding syntax under each formulation.
+
+Concept           | Syntax A          | Syntax B      | Syntax C
+----------------- | ----------------- | ------------- | ----------
+"data struct"     | `struct`          | `data struct` | `struct`
+"data enum"       | `enum`            | `data enum`   | `enum`
+"abstract struct" | `abstract struct` | `struct`      | `class`
+"abstract enum"   | `abstract enum`   | `enum`        | (`class enum`?)
+
+The advantages and disadvantages of each are:
+
+ * **Syntax A**
+   * **+** Plain `struct`s and `enum`s are the same thing as in C.
+   * **-** Wrong defaults: making things private requires more syntax than making them public.
+
+ * **Syntax B:**
+   * **+** Good defaults: a modifier is needed to expose, rather than to hide fields.
+   * **-** Plain `struct`s and `enum`s are different than in C: the equivalents to C are `data struct` and `data enum`.
+
+ * **Syntax C:**
+   * **+** Plain `struct`s and `enum`s are the same thing as in C.
+   * **+** The `struct` vs. `class` distinction is evocative, and has history.
+   * **0** The defaults are not wrong: neither case requires more syntax than the other.
+   * **-** The juxtaposition of `struct` and `class` may evoke the wrong thing: our meaning is similar in spirit to C++ (where `struct` members are public and `class` members are private by default), but very different from C#, D, and Swift (where `struct`s are unboxed and by-value, while `class`es are boxed and by-reference - our proposal has no such difference).
+   * **-** This syntax doesn't extend cleanly to the `enum` case. It is possible to use a less pleasant syntax such as `class enum`, or to omit the possibility of abstract `enum` types, and require embedding a data `enum` in an abstract newtype for this use case (as is currently done).
+
+In the following we will generally just refer to these colloquially as "data types" and "abstract types" (resp. "data `struct`s", "abstract `enum`s", etc.), instead of using any particular syntax.
+
+
+## Variations on semantics
+
+
+### Things in common
+
+The fields and variants of data types are public by default, and cannot be made private. Literals of these types and pattern matches on their contents may be used in any module which has access to them.
+
+The fields and variants of abstract types are private by default. Individual fields of abstract `struct`s may be made `pub`. Use of literals of these types and pattern matches on them outside of the module which owns them is restricted (details below).
+
+The built-in traits (currently `Copy`, `Send`, and `Sync`; later `Transmute`/`Coercible`/`Cast`) are automatically derived for data types by the compiler based on their contents, just as is currently done. For abstract types, they must be derived or implemented manually by the programmer, and the compiler verifies that this is safe based on the contents of the type.
+
+TODO "if you could write it by hand" rule
+TODO examples?
+TODO variance
+
+### Simpler variation
+
+Outside of the module which owns them:
+
+ * Literals of abstract types, including functional struct updates, and pattern matches on their contents (using the name of the `struct` or variant) are forbidden.ose capabilities could potentially 
+
+ * Individual `pub` fields of abstract `struct`s may only be accessed using dot-notation: `my_abstract_struct.some_field`.
+
+(Inside the owning module (including its submodules), there are no such restrictions.)
+
+Individually specified `pub` fields of tuple structs are removed. (Tuple struct fields are either all public or all private.) For a mix of public and private fields, use a `struct` with named fields.
+
+This resolves the functional struct update problem by making the second line from the example illegal, and no further action is required.
+
+
+### Sophisticated variation
+
+Individual variants of abstract `enum` types may be marked `pub`. The fields of these variants are also public.
+
+Individually specified `pub` fields of abstract tuple structs must come before all private fields.
+
+Outside of the module which owns them:
+
+ * Literals of abstract `struct`s require a `..` wildcard (in other words, only functional struct updates are allowed).
+
+ * A functional struct update of an abstract `struct` consumes the whole source object, not just the individ with respect to the capabilities of the language.ual fields which are used for the update. (Of course, if the type implements `Copy`, "consuming" it still leaves the source object usable.)
+
+ * Pattern matches on the contents of abstract `struct`s require a `..` wildcard.
+
+ * Pattern matches on the contents of abstract `enum`s require an arm with a `_` wildcard pattern. (Pattern matches on abstract `enum`s are never irrefutable.)
+
+The above remain true even if all individual fields or variants of the abstract type are marked `pub`! This is because client code should not be able to "know about" whether or how many private fields or variants an abstract type has, nor rely on it.
+
+This resolves the functional struct update problem by making the third line from the example illegal (`v` will have been consumed on the second line).
+
+### Notes
+
+The two presented options are two ends of an extreme; there are other variations which could be formed by mixing and matching aspects of the two.
+
+As the more sophisticated variant is strictly more permissive than the simpler one, the difference in capabilities could potentially be added later in a backwards-compatible way.
+
+The author has a slight preference for the simpler variant. It is notable that the sophisticated variant requires special handling to rule out the struct update problem, while in the simpler variant it is impossible by default. This is more reassuring from the perspective of there not being any other hidden problems still lurking.
+
+
+### Optional add-on: `data trait` to allow moving built-in traits to libraries
+
+ * a `data trait` is an empty, non-generic trait (for now)
+ * automatically derived for all built-in types which don't conceptually require abstraction barriers to implement
+   (i.e. which are equivalent to just a big ADT)
+   u8..u64, i8..i64, int, uint, bool, char; [T, ..N] and tuples if contained type(s) also satisfy; but *not* &, &mut
+   what about `fn`, *T?
+ * automatically derived for user data types whose members all implement the given `data trait` (same as for current built-in traits)
+ * must be explicitly implemented/derived for built-in & user abstract types (incl. `&`, `&mut`)
+
+QUESTION if I declare a `data trait Foo` and `impl<T> Foo for std::Box<T>` (type I don't own), should it check the private fields of `Box<T>` for compliance?
+  (a) always check private fields                                => breaks abstraction
+  (b) never check private fields                                 => breaks safety
+  (c) check private fields, but only allow impl in owning module => breaks modularity/compositionality/flexibility/whatever
+
+(only arises for custom traits, not built-in ones)
+Likely resolution:
+ * `#deriving` checks private fields, only allowed in owning module (attached to type), is safe.
+ * Outside owning module, can only `unsafe impl`, does not check private fields.
+This probably applies in general to all data/unsafe traits (also e.g. `Any`/`Typeable`/`Dynamic`, `Trace`): 
+  The compiler knows how to generate safe impls!
+  Only user impls need to be explicitly trusted.
+
+What's the relationship between `data trait` and `unsafe trait`??
+
+Also being able to write `Box<Trait + DataTrait>`, w/o vptr for DataTrait... should this be extended to all empty traits? or just data traits?
+
+Also the thing that incoherence is OK for empty traits: should it be allowed for all empty traits? or requested explicitly?
+
+So: a number of related capabilities, not clear how they should be organized
+
++ nice mnemonic (but only with the `data struct` / `data enum` syntax)
+
++ simple, solves the problem
+
+- narrowly targetted
+
+- not obvious that this is the best long-term solution (w.r.t. above question of capability organization & others)
+
+recommendation: maybe behind a feature gate?
+
+Potential more general longer-term solution:
+more general datatype-generics system (~ GHC.Generics):
+  impl your trait for primitive/built-in/abstract types
+  impl it for anonymous products: tuples
+  impl it for anonymous sums, e.g. (A|B|C)
+  (what about exponentials i.e. functions?)
+=> gets derived automatically for same-shape named/non-anonymous/user-defined data types, via Transmute
+and derivable explicitly for abstract types (again via Transmute)
+something along these lines, best formulation not 100% obvious
+
+
+### Optional add-on: closed traits
+
+TODO link to motivation from no-privates-in-public
+
+only real up-front question is syntax
+
+`abstract trait`?? `trait class`?? sealed, closed, ...
+
+Core of it is just: 
+  * can only write `impl`s in owning module
+  * methods are private unless marked `pub`
+
+(completely analogous: trait ~ generic abstract struct w/ function ptr fields, impl ~ static instance of struct, can only be constructed in owning module)
+
+
+In the future: Knowing that the set of impling types is closed lets you do a _lot_ of things!!
+
+Improvement of types in type inference!
+    http://research.microsoft.com/en-us/um/people/simonpj/papers/oo-haskell/overloading.pdf
+    Problem of single impl `impl<T: ClosedTrait> ClosedTrait for Foo<T> { }` leads to infinite improvement loop...
+    Solution in paper: ban closed traits as supertrait constraints. This seems excessive. Seems better to e.g. require a base case.
+    (Or just allow nontermination, w/ a depth counter to bail out. AFAIK we don't make any attempt to exclude `UndecidableInstances` w/ normal `impl`s either.)
+
+Overlap/specialization! 
+    Would this violate coherence? According to paper: no!
+    https://github.com/rust-lang/meeting-minutes/blob/master/workweek-2014-08-18/library-experience-report.md
+    OK to do overlap/specialization as long as all impls are in same place!
+    "All potentially overlapping impls must be in scope" rule (trivially satisfied)
+    Question of how impl is selected: best match or first match?
+    First match is more flexible, but requires impls be clearly ordered
+    (in theory we could even offer both separately w/ different syntax, if there's any reason to want that)
+
+If the set of types is closed, they have a statically known max size+alignment!
+    So: can store closed trait objects unboxed!
+    Could also e.g. switch-on-tag instead of virtual call.
+    Maybe this is how you implement "union types"? (exceptions rfc)
+      A union type (A|B|C|...) is just a closed trait implemented for exactly the listed types?
+      (the hard part is getting (C|A) to be a subtrait of (A|B|C)... so still need some magic)
+
+And what's the connection between closed trait objects and enums?
+(Also, datasort refinements... hmm.)
+Would we allow "matching" on a closed trait object to figure out which type it is?
+Or should this be a distinct capability layered on top?
+
+Important: set of impls is finite, but set of _types which impl_ may not be!!
+    closed trait Foo { ... } 
+    impl<T> Foo for T { ... }
+    => oops
+    but this is probably manageable somehow
+    should still be able to _determine_ if the set of types is finite, whether they have an upper bound on size, etc...
+    alternately, maybe can impose some kind of restrictions?
+      might this be connected to `ref` (EQT)...? 
+      something like: the impl _head_ may not mention the type unboxed (same as the `ref` restriction)... but where does the `ref` go? trait? impl?
+      maybe this rule: "type parameters of closed trait `impl`s must be either `ref` or bounded by a closed trait"?
+      => this would ensure a fixed max bound on size, but not on set-of-impling-types
+    but maybe would be better to keep restricted/unrestricted separate w/ some explicit syntax to require restriction, or infer when it's satisfied
+    experience will tell
+
+Turns out that closed traits might be even more important than closed structs / enums...
+
+(TODO: re-inspect various unify-enum-and-struct, virtual-struct etc. proposals to see whether they boil down to similar ideas)
+
+
+
+
+# Drawbacks
+
+An additional distinction that has to be learned. **But** this is essential/inherent complexity, and we are faithfully modelling it. User programs will thank us.
+
+Adds a keyword (`data`, `abstract`, or `class`).
+
+
+
+Why should we *not* do this?
+
+
+# Alternatives
+
+status quo blah blah
+
+What other designs have been considered? What is the impact of not doing this?
+
+
+# Unresolved questions
+
+syntax A, B, or C
+
+simpler or more sophisticated semantics formulation
+
+whether to add `data trait`
+
+whether to add closed traits (what to call them)
+
+...if we do this, could/should "`impl Drop` disables `Copy`" rule be removed, or turned into a lint? (`Drop` impl for `Copy`able type)
+(in general, not clear when you would want `Drop` for data types, except debugging/logging)
+
+
+What parts of the design are still TBD?
+
+
+# Future work
+
+? explicit variance annotations for abstract types (if we can't just get rid of variances)
+

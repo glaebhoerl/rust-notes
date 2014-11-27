@@ -1,3 +1,166 @@
+Après moi, le déluge.
+
+# Summary
+
+Simplify the language by removing distinctions as well as conflations which do not carry their weight. In particular, the conflation of modules and types is removed. Paths may no longer contain types: everything before `::` is a module, and everything after `:` is a type. Furthermore the distinction between methods and functions is removed: only free-standing functions remain. Method call syntax may be used with any function, and uses limited argument-dependent lookup on the receiver in order to avoid the need to separately import every method. The result is a great decrease in complexity and a substantial increase in flexibility at little to no cost in terms of verbosity.
+
+
+# Motivation
+
+Rust as it currently exists makes a distinction between methods and free-standing functions, and allows names to be scoped under types as well as modules. This has proved to be a bottomless pit of accidental complexity throughout the language, which we are forced to deal with, and which yet tends to fly under the radar. It is a self-inflicted wound and an unforced error.
+
+In an unorthodox approach, below we are going to list the benefits of the status quo relative to this proposal, and afterwards, its drawbacks.
+
+Benefits of the status quo:
+
+ * So-called "static" methods of types may be called by qualifying them with the name of the type: for example, `Vec::new()`. This is readable, suggestive, and pleasant to look at.
+
+ * Import lists need only list the type to gain access to all of its *static* methods.
+
+Drawbacks of the status quo:
+
+ * A tremendous amount of complexity in the language specification and implementation.
+
+ * Supporting function call syntax for methods requires dedicated effort and complexity.
+
+ * Referring to associated items with precision requires special, not very appealing syntax. The rules for lookup of associated items is amazingly complex and takes up almost half of [the associated items RFC]().
+
+ * Given the possibility of referring to associated items as scoped under their type, it is a natural expectation for this to also work appropriately through typedefs. Supporting this again involves a considerable amount of complexity.
+
+ * Requires types and modules to live in the same namespace. Among other things, this makes it impossible to simulate the scoping of `enum` variants under their type by using a module of the same name.
+
+ * Requires a greater number of built-in language constructs such as `self`, `Self`, and so-called anonymous `impl`s, which has a cost in terms of simplicity and learnability. (This is not just theoretical: a very smart friend of mine recently complained of being confused by the `self` shorthand.)
+
+ * Only those functions may be called using method syntax which were declared as methods. As a result:
+
+ * There is sometimes demand for *both* a method and function form of the same thing.
+
+ * Instead of being freestanding generic functions, every useful function is moved into the given trait as a method with a default definition. But they should not be overridden! As a result, instead of being a simple trait with a `next` and a `size_hint` method, `Iterator` is a giant monstrosity.
+
+ * When writing generic functions over a trait you do not own, instead of just defining freestanding generic functions, common practice is to define a so-called "extension trait". But this `trait` is not meant to be `impl`ed or abstracted, and it is redundant boilerplate to boot. All for the sake of the nicer method syntax!
+
+ * Different modules are unable to re-export a type with a different set of inherent methods; the set of methods is fixed by the original author.
+
+ * Due to methods being syntactically preferable to freestanding functions, the large majority of Rust code is written inside `impl` blocks, which means that it has a rightwards creep penalty of 4 lines by default.
+ 
+After considering these tradeoffs carefully and at length, our _ recommendation would be to not keep the status quo.
+ 
+Notably, most of these decisions seem to have been adopted from C++. But even in C++, the fact that method syntax is restricted to the methods defined by the owner of the type is considered to be a wart, and it appears likely that this restriction will finally be done away with in the next version of C++. It would be highly awkward and likely untenable for us to continue having this restriction even after C++ has removed it. Instead of coming up with some haphazard and likely costly way to bolt on this flexibility after the fact once our hand is forced, we should get it right from the start.
+http://www.reddit.com/r/programming/comments/2j3kr4/proposal_for_unified_call_syntax_for_c_xfy_vs_fxy/
+
+
+
+# Detailed design
+
+First we will describe the changes relative to the existing language, then we will illustrate the impact of these changes on various use cases.
+
+## Changes
+
+ * `Self` is removed. All input type parameters of a trait are introduced explicitly. For example, `trait ToString { ... }` becomes `trait ToString<T> { ... }`, with references to `Self` replaced with `T`.
+
+ * The fully explicit way to write trait bounds is via `where` syntax: for instance, `fn print<T>(self: &T) where ToString<T>`. The current `Type: Trait` syntax still exists as sugar. The following signatures are equivalent to the previous one: `fn print<T>(self: &T) where T: ToString`; `fn print<T: ToString>(self: &T)`.
+
+ * TODO combining traits with `+`
+ 
+ * The shortened `self` syntax is removed. Instead, the syntax for the "receiver" is the same as for all other parameters. For example, `fn to_string(&self) -> String` becomes `fn to_string(self: &T) -> String`. (Assuming that `self` is still allowed as the name of an argument.)
+
+ * TODO `?` syntax for trait objects?
+
+ * Associated items, including associated functions, are no longer scoped under the given trait. Instead, they are scoped under the module containing the trait. What was formerly `std::to_string::ToString::to_string` is now `std::to_string::to_string`.
+
+ * The input type parameters of a trait are prepended to the type parameter lists of each of its associated items.
+
+ * In import lists, allow writing `Trait { .. }` instead of just `Trait` to import all of its associated items along with the given `trait`. For example, `use std::to_string::ToString { .. }` will import both `ToString` and `to_string`. (This feature could potentially be extended to `enum`s and their variants as well.)
+
+ * Replace the current `impl Trait for Type` syntax with `impl Trait<Type>`. For example, `impl ToString for bool` is now `impl ToString<bool>`. As a result, the `impl` syntax now mirrors the `trait` syntax.
+
+ * Remove anonymous `impl`s. Instead of methods in `impl`s, write freestanding functions. If the ability to scope generics over multiple item definitions is desired, it should be accomplished with a `for<T> { ... }` construct as described by [RFC ??]().
+ 
+ * Allow calling any function using method syntax, where the receiver is the first argument. For instance, `a.foo(b)` and `foo(a, b)` are mostly equivalent. Method syntax has the special property that it also performs autoref, autoderef, and name resolution based on the type of the first argument (a.k.a. argument-dependent lookup (ADL), type-directed name resolution (TDNR)). The first two are nothing new, and the third is described more precisely in a separate section below.
+
+
+### Argument-dependent lookup
+
+Given a method call `a.foo(b)`, the process for resolving the function that is called is as follows:
+
+ 1. Is there exactly one function called `foo` visible in the current scope? If so, the call resolves to that function. If more than one `foo` is visible [due to glob imports](https://github.com/nikomatsakis/rust-name-resolution-algorithm/issues/1), it is an error.
+
+ 2. Otherwise, consider the type of the supplied receiver `a`. Does this type `impl Deref`? If yes, consider instead the type which it `deref`s to. Repeat this until we arrive at a type which does not `impl Deref`.
+ 
+ 3. Is this type a generic type applied to some type arguments? If yes, consider the generic type without its arguments. If not, consider the original ("atomic") type. In either case, let us refer to it as the outermost type constructor.
+ 
+ 4. Has this outermost type constructor been imported into the current scope from exactly one module? If yes, consider this module. Otherwise (it was not imported, or imported from more than one module), it is an error.
+ 
+ 5. Does this module contain a function called `foo`? If yes, the call resolves to that function. Otherwise, it is an error.
+
+More succintly, we look for `foo` first in the current scope, then in the module where the outermost type constructor of the fully-dereferenced type of the receiver was imported from.
+
+(Note that this only covers name resolution of the call, and the call may fail to typecheck after it has been resolved.)
+ 
+ordering: explicit import -> glob imports -> ADL
+
+## Impact
+
+Impact on existing code
+  can basically keep calling all funcs/methods the same thing
+  method calls still work as usual
+  for "static" methods, qualify with name of module instead of name of type
+  Vec::new() -> vec::new()
+    might want an easier way to import both module + things in it
+    use std::vec::{self, Vec}; // we already have this?
+    use std::{vec, vec::Vec};
+    use std::vec{,::Vec}; // ick
+    use std::vec; use vec::Vec; // with relative instead of absolute `use` paths
+    use { std::vec, vec::Vec };
+    something similar to `mkdir -p` where it imports every component of a path?
+      but what syntax?? `use all`?
+  instead of just `use foo::Trait`, have to write `use foo::Trait { .. }` to import methods
+  name clashes between trait methods need to be explicitly disambiguated (no difference from top-level generic fns), but this should be rare
+  world doesn't end
+
+ * TODO Add some kind of also-`use`-every-module-in-path syntax?
+
+
+# Discussion
+
+ADL:
+  outermost type constructor rule matches current usage of `impl` blocks
+  assumes that `.` always fully dereferences
+
+
+previously could have multiple `impl` blocks in a single module for different types declaring methods of the same name; now can't
+
+  I.O.W.: ADL, but only for receiver (and can opt-out with funcall syntax)
+  (could also have a lint for ADL lookups (default: allow), if someone wants to require explicit method imports/references)
+
+Ancillary benefits:
+  Remaining complexity in `resolve` is localized to `.`
+  Potential `impl Trait` greppability
+  Name resolution happens before typechecking? (maybe not, due to `.`)
+  Far future: might make it easier to have modules-parameterized-over-types or types-parameterized-over-modules (e.g. ML-style modules)?
+
+UMCS/ADL: basically it should keep working more or less how it currently works, any major changes => separate proposal
+
+Lifetime elision for `self`: (a) remove it, (b) use first arg instead, (c) make the `self` name special
+
+Future: parameterize modules over types, types over modules?
+
+# Alternatives
+
+ * keep some of the existing constructs?
+   core objectives: no types in paths, UMCS
+   e.g.: `impl .. for ..`, ...
+
+ * Trait { * } instead of Trait { .. }
+ 
+ * do ADL differently
+   e.g. type-based disambiguation of glob imports
+ 
+ * no ADL, just use glob imports
+ 
+
+ 
+
 Deconflate types and modules
   -> "Stop treating types as modules" ?
   current types-as-modules conflation is self-inflicted wound, unforced error
@@ -18,18 +181,12 @@ Remove Self and self
   for MPTCs, have to make it explicit with `?`: `&Bar<?, int>` or `&Bar<int, ?>`
      desugar to `exists T where Bar<T, int>. &T` resp. `exists T where Bar<int, T>. &T`
   (SPTCs can also be written `&Foo<?>` if desired)
-  far future: 
-    for fully explicit existential quantification syntax, perhaps use `?` instead of `exists`?
-    e.g. `type ShowBox = ?T: Show. Box<T>`
   can you also write `T: Bar<?, int>`?
   i.e. is `Bar<?, int>` itself a trait in all respects?
   TODO does this accidentally induce type lambdas?? think it through
     maybe should just quantify over last param always...
   would `self` stay a keyword?
     only other use is with `use`? but might want to change that also :o)
-
-Trait type parameters always input types, output types always associated types
-  already part of aturon's RFC :)
 
 Associated items (incl. methods) live in same scope as trait (in module containing trait)
   allow writing `use mod::{foo, Trait { .. }, bar}` to import all associated items together with trait (like Haskell)
@@ -57,82 +214,9 @@ Remove anonymous impls
   use `for<T> { ... }` to scope generics over multiple items, if desired, and typedefs to abbreviate types (e.g. receiver)
   e.g. `impl<T: Trait> Foo<T> { ...items... }` becomes `for<T: Trait> { ...items... }`
 
-UFCS
-  there is no such thing any longer as "a method", only functions and associated functions
-  so this is trivial.
 
-UMCS
-  can call /any/ function using `.` syntax, receiver is first argument
-  `.` is magical, unlike normal function calls
-  autoref, autoderef, TDNR, etc.
-  basically it should keep working more or less how it currently works, any major changes => separate proposal
-  only need to add a mechanism to avoid having to import every method separately (keep not having to)
-  we choose: search for method first in caller's scope, then in module where type of receiver was *imported from*
-    "imported from", rather than "defined in"!
-    makes it possible for different modules to do different remixes of provided methods
-    compositionality, etc.
-    1. look at type of receiver
-    2. determine outermost type constructor
-    3. look in module where it was imported from
-    4. method is a match if... it type checks? or, stricter: outermost type constructor of first arg type matches?
-    QUESTION interaction with autoref/autoderef, esp. for custom types? (for &Foo, "outermost type constructor" should actually be Foo)
-    interacts with question of whether method calls on smart pointers invoke method on pointer, or on contents
-    e.g. if it's always on content, first look at outermost TC, if it impls Deref, deref it, then consider that type (goto 1)
-  I.O.W.: ADL, but only for receiver (and can opt-out with funcall syntax)
-  (could also have a lint for ADL lookups (default: allow), if someone wants to require explicit method imports/references)
 
-Impact on existing code
-  can basically keep calling all funcs/methods the same thing
-  method calls still work as usual
-  for "static" methods, qualify with name of module instead of name of type
-  Vec::new() -> vec::new()
-    might want an easier way to import both module + things in it
-    use std::vec::{self, Vec}; // we already have this?
-    use std::{vec, vec::Vec};
-    use std::vec{,::Vec}; // ick
-    use std::vec; use vec::Vec; // with relative instead of absolute `use` paths
-    use { std::vec, vec::Vec };
-  instead of just `use foo::Trait`, have to write `use foo::Trait { .. }` to import methods
-  name clashes between trait methods need to be explicitly disambiguated (no difference from top-level generic fns), but this should be rare
-  world doesn't end
 
-Would be nice if glob imports of same-name functions didn't cause errors!
-  relative to Niko's prototype: can we do ambiguity checks for glob imports lazily?
-  https://github.com/nikomatsakis/rust-name-resolution-algorithm
-  i.e. if we glob import the same name from different modules, it's not an error until we try to use it?
-  maybe just instead of this:
-    If there is already a binding for `x`, and that binding originated from *another glob use*, then we report a *hard error*.
-  say:
-    ..., then we bind `x` to a booby trap (bottom), and any use of `x` will become a *hard error*.
-  or rather, instead of a single glob binding, keep a list of them, and require num == 1 when resolving to it, otherwise report an ambiguity error with the full list
-
-Benefits:
-  Should simplify resolve a lot!
-    Remaining complexity is localized to `.`
-  Eliminates complexity around UFCS
-  Eliminates complexity around `Trait::foo()` vs `Type::foo()` vs `<Type as Trait>::foo()`, etc.
-    Now it's just `foo()`, or `module::foo()`
-    Especially for associated items... half of that RFC is just about this!!
-      Those simply become `AssocType<Foo>`, or `module::AssocType<Foo>`
-  Eliminates complexity around explicit type application for `Self`
-    No need for special syntax like `foo::<for String>()`
-    Now it's just `foo::<String>()` like everything else
-  Eliminates complexity around calling methods through typedefs
-    type IntVec = Vec<int>; IntVec::new() ... 
-    Now it's just `vec::new()`
-  UMCS!!
-  Removes need/demand for semantically gross "extension traits" and extraneous default methods
-    Simplify e.g. Iterator to just `next` and `size_hint`, as it should be
-  Method remixes
-  Simplicity, consistency, orthogonality, compositionality...
-  80% of Rust code is shifted 4 lines leftwards :)
-  Potential `impl Trait` greppability
-  Name resolution happens before typechecking? (maybe not, due to `.`)
-  Far future: might make it easier to have modules-parameterized-over-types or types-parameterized-over-modules (e.g. ML-style modules)?
-
-Drawbacks:
-  lose cute `Vec::new()` syntax
-  ...I think that's it.
 
 
 

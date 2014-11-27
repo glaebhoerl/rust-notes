@@ -18,7 +18,15 @@ like, maybe we are already doing some kind of scary impredicative types but the 
 every time you think, "wait, how does this interact with unsized types", you should have been thinking in terms of EQT instead
 (e.g. "can you pass unsized types by-value?" this is like "how many angels can dance on the head of a pin")
 (unsized types should not be a separate "thing" - DST is "leaky" and infects things it should not)
-solves almost every major problem/annoyance with trait objects/strings/DST in the current language. like killing 20 birds with one big stone (is there a less violent phrasing? I like birds)
+solves almost every major problem/annoyance with trait objects/strings/DST in the current language. like killing 20 birds with one big stone (is there a less violent metaphor? I like birds)
+
+summary:
+all types have a size!
+`ref` on typaram `T` is contract of representability independent of identity of `T` (performs same function as `unsized`, `Sized?`)
+  same thing as existing check for when a type can recursively contain itself! iff it is behind a `ref`
+this approach is /inverse/ of intensional type analysis: type system used to guarantee that ITT will not be necessary!
+existentially bound type variables must be behind a `ref`
+calling polymorphic functions on trait objects w/ dictionary passing
 
 see newer notes at bottom (scratchpad)
 
@@ -33,7 +41,7 @@ Existential types more accurately model the inherent logical structure, which ha
 
 `Trait` and `[T]` do not exist as types in themselves. Instead, when used inside appropriate (pointer-like) generic types, they are shorthand for existential types. `Box<Trait>` means `exists T: Trait. Box<T>` and `Box<[T]>` means `exists static N: uint. Box<[T, ..N]>`.
 
-The appropriateness of generic types for "hosting" such existentials is determined by user-provided, compiler-checked annotations on type parameters. A `ref` annotation on a type parameter is a contract between the provider of the item and its consumer, by which the provider promises that the representation of the item does not depend on the identity of the type provided as argument (and the compiler, again, verifies that this is so), and this allows the consumer to instantiate the parameter with a type whose identity is not statically known: in other words, with an existential type. (The `unsized` annotation of DST is `ref` seen through distorted glass, and serves the same purpose.)
+The appropriateness of generic types for "hosting" such existentials is determined by user-provided, compiler-checked annotations on type parameters. A `ref` annotation on a type parameter is a contract between the provider of the item and its consumer, by which the provider promises that the representation of the item does not depend on the identity of the type provided as argument (and the compiler, again, verifies that this is so), and this allows the consumer to instantiate the parameter with a type whose identity is not statically known: in other words, with an existential type. (The `Sized?` annotation of DST is `ref` seen through distorted glass, and serves the same purpose.)
 
 With this guarantee, *in addition* to any monomorphised representations of the given item, the compiler can also generate a fully generic representation which is suitable for types whose identity is not known at compile time, or in other words for existential types. An idea that is central to this design is *evidence*: for instance, evidence that trait bounds are satisfied. The evidence that a trait bound is satisfied is a pointer to the satisfying `impl` (vtable). For statically known types, evidence can be inline and specialized at compile time, while for existential types, evidence is threaded through the program as vtable pointers at runtime.
 
@@ -67,7 +75,7 @@ With this guarantee, *in addition* to any monomorphised representations of the g
 
 ## `ref` modifier on type parameters
 
-Introduce an optional modifier on type parameters: `ref`. This corresponds to `erased` in SST and performs the same function as `unsized` in DST proposals.
+Introduce an optional modifier on type parameters: `ref`. This corresponds to `erased` in SST and performs the same function as `Sized?` in DST proposals.
 
 I like the name `ref` because:
 
@@ -427,6 +435,8 @@ based on MLF? or QML, HML, HMF?
   what's the relationship between the "some" operator and unboxed trait objects?
     are they the same thing in any sense??
 
+what's the diff between exists T. T and just T?? opening vs. not opening an existential?
+
 ### Paper: "Quantified types for MLF"
   representation issue is nasty!
   is there a way to cleanly forbid just the difficult-to-represent things?
@@ -460,7 +470,7 @@ boxity polymorphism? http://www.reddit.com/r/haskell/comments/2d81tl/type_famili
 
 does `ref` on types mean anything more than "not stored unboxed in this type"?
 does this exactly correspond to the existing test for when a type is allowed to contain itself (i.e. is representable)?
-I think so!
+I think so!!
 
 ### Allows dynamically linked polymorphic functions!
 http://www.reddit.com/r/rust/comments/2c6pn0/how_does_rust_implement_calling_generic_functions/
@@ -499,6 +509,13 @@ but &Bytes will still be fat...
 instead of `static`s in types, have trait Static<T> { static Val: T }??
 and struct Bytes<N: Static<uint>>?
 but then &Bytes will be wrong...
+
+we could also have `struct CString<const N: uint> { contents: [u8, ..N] }`
+guaranteed to be null-terminated (w/ smart constructor)
+but restrictions on slicing (slices aren't CStrings, unless they are a suffix)
+then can have Box<CString>, &CString, etc. to model ownership as usual
+interestingly in this case we probably want to store the length _neither_ with the string nor the pointer? (but sometimes, maybe we do?)
+
 
 QUESTION how to model constraints on impls for traits-as-structs?
 "Or, put the other way around, does Eq e entail Eq [e]? More concretely, can we construct a dictionary for Eq [e] from a dictionary for Eq e?
@@ -539,7 +556,10 @@ let y = box obj.func(); // ok
 let z: Box<OtherTrait> = box obj.func(); 
 // this is legal!! :)
 
+##
 
+would dramatically simplify pnkfelix's higher-level allocator traits...
+(no need for separate Instance/ArrayAlloc, methods usable on trait objects, ...)
 
 
 
