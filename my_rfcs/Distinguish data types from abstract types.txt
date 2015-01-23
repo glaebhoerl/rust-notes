@@ -111,7 +111,7 @@ TODO variance
 
 Outside of the module which owns them:
 
- * Literals of abstract types, including functional struct updates, and pattern matches on their contents (using the name of the `struct` or variant) are forbidden.ose capabilities could potentially 
+ * Literals of abstract types, including functional struct updates, and pattern matches on their contents (using the name of the `struct` or variant) are forbidden.
 
  * Individual `pub` fields of abstract `struct`s may only be accessed using dot-notation: `my_abstract_struct.some_field`.
 
@@ -132,7 +132,7 @@ Outside of the module which owns them:
 
  * Literals of abstract `struct`s require a `..` wildcard (in other words, only functional struct updates are allowed).
 
- * A functional struct update of an abstract `struct` consumes the whole source object, not just the individ with respect to the capabilities of the language.ual fields which are used for the update. (Of course, if the type implements `Copy`, "consuming" it still leaves the source object usable.)
+ * A functional struct update of an abstract `struct` consumes the whole source object, not just the individual fields which are used for the update. (Of course, if the type implements `Copy`, "consuming" it still leaves the source object usable.)
 
  * Pattern matches on the contents of abstract `struct`s require a `..` wildcard.
 

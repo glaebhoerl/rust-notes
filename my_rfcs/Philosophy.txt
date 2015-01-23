@@ -1,4 +1,4 @@
-- the value of Rust is its invariants, if ever in doubt, err on the side of more and stronger invariants
+- the value of Rust is its invariants, if ever in doubt, err on the side of more and stronger invariants http://blog.higher-order.com/blog/2014/12/21/maximally-powerful/
 - avoid accidental complexity, faithfully and fastidiously model inherent complexity
   - omitting accidental complexity from the language makes the language as well as programs (semantically) simpler
   - sweeping inherent complexity under the rug in the language causes it to surface magnified in programs instead

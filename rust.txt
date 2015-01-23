@@ -8,14 +8,17 @@ Trait-based exception handling
 Rename `Option`, add `Assert` trait
 Represent equivalent enums the same as bool, make bool an enum
 Allow #attr and #attr(foo) but still require #[attr = foo]
+Lifetime syntax (lose the tick)
+foo::<T>() -> foo@<T>()
 
 NEXT UP
+"Enum match problem" lint
+Make `.` always maximally deref
+`extern mod`
+
 Distinguish data types from abstract types
 Deconflate types and modules
-`extern mod`
 Purity
-foo::<T>() -> foo@<T>()
-Lifetime syntax (lose the tick)
 DST reform (EQT)
 
 trait Transmute
@@ -1372,3 +1375,17 @@ https://github.com/rust-lang/rfcs/issues/413
 Rust vs. C+Haskell
 http://www.reddit.com/r/rust/comments/2ll2of/c_and_haskell/clvsanj
 
+The benefits of checked arithmetic
+http://www.reddit.com/r/rust/comments/2nnpzg/rfc_scoped_attributes_for_checked_arithmetic_146/cmf8ajb
+
+Closures, existentials, type classes, OOP
+http://www.reddit.com/r/haskell/comments/2nqubp/record_equivalent_to_subclassed_member_variables/cmg3szc?context=3
+
+C++'s `&&` is Rust's `&mut`
+http://www.reddit.com/r/rust/comments/2oes6s/cs_rvalue_references_correspond_to_rusts_mut/
+
+Undecidable type checking
+http://www.reddit.com/r/rust/comments/2o6yp8/brainfck_in_rusts_type_system_aka_type_system_is/cmkuvbu
+
+Kind syntax
+http://www.reddit.com/r/programming/comments/2ny8c1/rust_generics_and_collections/cmiqhyx
